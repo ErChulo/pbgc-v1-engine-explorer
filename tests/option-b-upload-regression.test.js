@@ -777,3 +777,152 @@ test('metric router emits distance vocabulary families and flat warehouse rows',
   assert.equal(payload.checks.nodeCountRow.metric_type, 'number');
   assert.equal(payload.checks.nodeCountRow.source, 'graph');
 });
+
+test('engine comparison emits explainable family distances and named similarity profiles', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const baseEngine = {
+    engine_id: 'E_BASE',
+    schema_version: 'comparison-fixture',
+    engine_name: 'Base Retirement Engine',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: {
+            cell: 'A1',
+            genericField: 'NORMAL_RETIREMENT_BENEFIT',
+            description: 'Normal retirement benefit with interest and mortality assumptions',
+            hasFormula: true,
+            runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } }
+          },
+          B1: {
+            cell: 'B1',
+            genericField: 'FINAL_AVERAGE_COMPENSATION',
+            description: 'Final average compensation input',
+            hasFormula: false,
+            runs: { XRD: { field: 'FINAL_AVERAGE_COMPENSATION', iob: 'I' } }
+          },
+          C1: {
+            cell: 'C1',
+            genericField: 'SERVICE',
+            description: 'Credited service input',
+            hasFormula: false,
+            runs: { XRD: { field: 'SERVICE', iob: 'I' } }
+          }
+        },
+        formulas: {
+          A1: {
+            cell: 'A1',
+            formula: 'NPVF2(B1*C1,Plan_Int)',
+            refs: ['B1', 'C1', 'Plan_Int'],
+            functions: ['NPVF2']
+          }
+        },
+        formulaCells: ['A1'],
+        dependents: { B1: ['A1'], C1: ['A1'], Plan_Int: ['A1'] }
+      }
+    },
+    namedRanges: ['Plan_Int']
+  };
+  const formulaDifferent = JSON.parse(JSON.stringify(baseEngine));
+  formulaDifferent.engine_id = 'E_FORMULA';
+  formulaDifferent.worksheets.Separated.formulas.A1.formula = 'IF(B1>0,ROUND(B1*C1,2),0)';
+  formulaDifferent.worksheets.Separated.formulas.A1.refs = ['B1', 'C1'];
+  formulaDifferent.worksheets.Separated.formulas.A1.functions = ['IF', 'ROUND'];
+  formulaDifferent.namedRanges = [];
+
+  const benefitDifferent = JSON.parse(JSON.stringify(baseEngine));
+  benefitDifferent.engine_id = 'E_BENEFIT';
+  benefitDifferent.worksheets.Separated.cells.A1.genericField = 'QPSA_LUMP_SUM_BENEFIT';
+  benefitDifferent.worksheets.Separated.cells.A1.description = 'Qualified preretirement survivor lump sum beneficiary benefit';
+  benefitDifferent.worksheets.Separated.formulas.A1.formula = 'QPSAPVF(B1*C1,Plan_Int)';
+  benefitDifferent.worksheets.Separated.formulas.A1.functions = ['QPSAPVF'];
+
+  const injection = `
+<script>
+(function(){
+  const result = { ok: false, checks: {} };
+  try {
+    const base = ${JSON.stringify(baseEngine)};
+    const formulaDifferent = ${JSON.stringify(formulaDifferent)};
+    const benefitDifferent = ${JSON.stringify(benefitDifferent)};
+    const identical = compareEngines(base, JSON.parse(JSON.stringify(base)));
+    const formulaReport = compareEngines(base, formulaDifferent);
+    const benefitReport = compareEngines(base, benefitDifferent);
+    result.ok = true;
+    result.checks = {
+      metricVersion: identical.metric_version,
+      familyNames: Object.keys(identical.family_distances).sort(),
+      profileNames: Object.keys(identical.profile_scores).sort(),
+      identicalOverallDistance: identical.profile_scores.overall_weighted_similarity.distance,
+      identicalOverallSimilarity: identical.profile_scores.overall_weighted_similarity.similarity,
+      formulaStructuralDistance: formulaReport.family_distances.structural_graph.distance,
+      formulaImplementationDistance: formulaReport.family_distances.formula_implementation.distance,
+      formulaTopDifference: formulaReport.top_differences[0],
+      benefitStructuralDistance: benefitReport.family_distances.structural_graph.distance,
+      benefitArchitectureDistance: benefitReport.family_distances.benefit_architecture.distance,
+      benefitTopDifferences: benefitReport.top_differences.slice(0, 4).map(row => row.family),
+      primitiveScalar: scalarDistance(100, 120),
+      primitiveSet: setDistance(['a', 'b'], ['b', 'c']),
+      primitiveVector: vectorDistance({ IF: 2 }, { ROUND: 2 }),
+      reportShape: {
+        engineA: formulaReport.engine_a_id,
+        engineB: formulaReport.engine_b_id,
+        hasComponents: formulaReport.family_distances.formula_implementation.components.length > 0,
+        hasWeights: !!formulaReport.profile_scores.formula_similarity.weights.formula_implementation,
+        hasMissingReport: Array.isArray(formulaReport.missing_metric_report)
+      }
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'engine-compare-');
+
+  assert.equal(payload.checks.metricVersion, 'v0.7');
+  assert.deepEqual(payload.checks.familyNames, [
+    'benefit_architecture',
+    'formula_implementation',
+    'operational_data_quality',
+    'semantic_field',
+    'structural_graph'
+  ]);
+  assert.deepEqual(payload.checks.profileNames, [
+    'benefit_architecture_similarity',
+    'business_field_similarity',
+    'formula_similarity',
+    'overall_weighted_similarity',
+    'risk_complexity_similarity',
+    'structural_similarity'
+  ]);
+  assert.ok(payload.checks.identicalOverallDistance <= 0.000001);
+  assert.ok(payload.checks.identicalOverallSimilarity >= 0.999999);
+  assert.ok(payload.checks.formulaStructuralDistance < 0.25);
+  assert.ok(payload.checks.formulaImplementationDistance > payload.checks.formulaStructuralDistance);
+  assert.equal(payload.checks.formulaTopDifference.family, 'formula_implementation');
+  assert.ok(payload.checks.benefitStructuralDistance < 0.25);
+  assert.ok(payload.checks.benefitArchitectureDistance > payload.checks.benefitStructuralDistance);
+  assert.ok(payload.checks.benefitTopDifferences.includes('benefit_architecture'));
+  assert.ok(payload.checks.primitiveScalar > 0.16 && payload.checks.primitiveScalar < 0.17);
+  assert.ok(payload.checks.primitiveSet > 0.66 && payload.checks.primitiveSet < 0.67);
+  assert.equal(payload.checks.primitiveVector, 1);
+  assert.equal(payload.checks.reportShape.engineA, 'E_BASE');
+  assert.equal(payload.checks.reportShape.engineB, 'E_FORMULA');
+  assert.equal(payload.checks.reportShape.hasComponents, true);
+  assert.equal(payload.checks.reportShape.hasWeights, true);
+  assert.equal(payload.checks.reportShape.hasMissingReport, true);
+});

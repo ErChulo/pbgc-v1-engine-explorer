@@ -1736,6 +1736,47 @@ function benefitCategoryForText(text){
   return categories;
 }
 
+const BENEFIT_DOMAIN_RULES = {
+  normal_retirement: ['normal retirement', 'nrd', 'normal_retirement', 'retdate'],
+  early_retirement: ['early retirement', 'erd', 'erfaeq', 'pbgcerf', 'pbgcme'],
+  late_retirement: ['late retirement', 'lrd', 'lrfaeq', 'pbgclrf', 'pbgcml'],
+  deferred_vested_retirement: ['deferred vested', 'deferred_vested', 'vested', 'vesting'],
+  in_pay_retiree_benefits: ['in pay', 'in-pay', 'retiree', 'pay status'],
+  beneficiary_benefits: ['beneficiary', 'survivor', 'spouse'],
+  alternate_payee_benefits: ['alternate payee', 'alternate_payee', 'ap benefit', 'qdro'],
+  qjsa: ['qjsa', 'qualified joint and survivor'],
+  qpsa: ['qpsa', 'qualified preretirement survivor', 'qpsapvf'],
+  preretirement_death_benefit: ['preretirement death', 'pre-retirement death', 'dod', 'death before'],
+  postretirement_death_benefit: ['postretirement death', 'post-retirement death', 'death after'],
+  disability_benefit: ['disability', 'disabled'],
+  lump_sum: ['lump sum', 'lump_sum', 'ls_', 'pvf_lev_ls', 'pvf_qpsa_ls'],
+  annuity_form_conversion: ['annuity form', 'form conversion', 'pbgcbfcf2', 'bfcfaeq', 'pbgcbfcfppa'],
+  actuarial_equivalence: ['actuarial equivalence', 'actuarial equivalent', 'aeq', 'faeq'],
+  mortality: ['mortality', 'mort', 'mortcode', 'mortdesc', 'qx', 'px', 'lx', 'npvf2', 'npvfss'],
+  interest: ['interest', 'int_', 'intcode', 'ratetier', 'iir', 'iirl', 'pacsiir', 'pacsiif', 'npvf2', 'npvfss'],
+  vesting: ['vesting', 'vest', 'yos'],
+  service: ['service', 'serv', 'servyca', 'servypa', 'servycw', 'servypw', 'servycp', 'servypp'],
+  credited_service: ['credited service', 'credited_service'],
+  eligibility_service: ['eligibility service', 'eligibility_service'],
+  compensation: ['compensation', 'comp', 'salary', 'pay'],
+  final_average_compensation: ['final average compensation', 'fac', 'havg', 'hcavg', 'sest_2', 'sestavg_2'],
+  cash_balance: ['cash balance', 'cash_balance'],
+  maximum_insurance_limit: ['maximum insurance', 'maxlim', 'maxlimppa'],
+  phase_in_limitation: ['phase-in', 'phasein', 'phaseinpct'],
+  guaranteed_benefit_limitation: ['guaranteed benefit', 'guarantee', 'gbl'],
+  asset_recovery_logic: ['asset', 'recovery', 'recov'],
+  data_quality_assumptions: ['missing data', 'data quality', 'assumption', 'default']
+};
+
+function benefitDomainsForText(text){
+  const value = String(text || '').toLowerCase();
+  const domains = [];
+  for (const [domain, patterns] of Object.entries(BENEFIT_DOMAIN_RULES)) {
+    if (patterns.some(pattern => value.includes(pattern))) domains.push(domain);
+  }
+  return domains;
+}
+
 function maxParenthesisDepth(text){
   let depth = 0;
   let maxDepth = 0;
@@ -1892,6 +1933,15 @@ function computeDirectedGraphDepth(edges){
   return { maxDepth, cycleNodeCount: cycleNodes.size };
 }
 
+function tokenizeText(text){
+  return String(text || '')
+    .toLowerCase()
+    .trim()
+    .split(/[^a-z0-9]+/g)
+    .map(token => token.replace(/s$/, ''))
+    .filter(Boolean);
+}
+
 function computeEngineMetrics(data, engineId='current'){
   const graph = computeEngineGraphModel(data);
   const degree = computeDegreeStats(graph.nodes, graph.edges);
@@ -1899,22 +1949,47 @@ function computeEngineMetrics(data, engineId='current'){
   const formulas = Object.values(data.formulas || {});
   const cells = Object.values(data.cells || {});
   const functionCounts = {};
+  const operatorCounts = {};
   const categoryCounts = {};
+  const domainCounts = {};
   const iobCounts = {};
+  const referenceSet = new Set();
+  const namedRangeRefSet = new Set();
+  const sourceTabSet = new Set(data.sourceTabs || []);
+  const runNameSet = new Set(data.runs || []);
+  const fieldNameSet = new Set();
+  const fieldDescriptionTokenSet = new Set();
+  const roleFieldCounts = {};
   let operatorCount = 0;
   let constantCount = 0;
   let maxFormulaNestingDepth = 0;
+  let totalFormulaNestingDepth = 0;
+  let totalFormulaLength = 0;
   let emptyArgumentFormulaCount = 0;
 
   for (const formula of formulas) {
     const formulaText = formula.formula || '';
-    operatorCount += countFormulaOperators(formulaText);
+    const cleanFormula = stripQuotedStrings(formulaText);
+    const ops = cleanFormula.match(/<>|>=|<=|[+\-*/^&=<>]/g) || [];
+    operatorCount += ops.length;
+    for (const op of ops) operatorCounts[op] = (operatorCounts[op] || 0) + 1;
     constantCount += countFormulaConstants(formulaText);
-    maxFormulaNestingDepth = Math.max(maxFormulaNestingDepth, maxParenthesisDepth(formulaText));
+    const nestingDepth = maxParenthesisDepth(formulaText);
+    maxFormulaNestingDepth = Math.max(maxFormulaNestingDepth, nestingDepth);
+    totalFormulaNestingDepth += nestingDepth;
+    totalFormulaLength += String(formulaText || '').length;
     if (formulaHasEmptyArgument(formulaText)) emptyArgumentFormulaCount++;
     for (const fn of formula.functions || []) {
       const key = String(fn || '').toUpperCase();
-      if (key) functionCounts[key] = (functionCounts[key] || 0) + 1;
+      if (key) {
+        functionCounts[key] = (functionCounts[key] || 0) + 1;
+        for (const domain of benefitDomainsForText(key)) domainCounts[domain] = (domainCounts[domain] || 0) + 1;
+      }
+    }
+    for (const ref of formula.refs || []) {
+      if (!ref) continue;
+      referenceSet.add(ref);
+      if ((data.namedRanges || []).includes(ref)) namedRangeRefSet.add(ref);
     }
   }
 
@@ -1927,9 +2002,16 @@ function computeEngineMetrics(data, engineId='current'){
     for (const category of benefitCategoryForText(semanticText)) {
       categoryCounts[category] = (categoryCounts[category] || 0) + 1;
     }
+    for (const domain of benefitDomainsForText(semanticText)) domainCounts[domain] = (domainCounts[domain] || 0) + 1;
+    if (cell.genericField) fieldNameSet.add(cell.genericField);
+    for (const token of tokenizeText(cell.description)) fieldDescriptionTokenSet.add(token);
     for (const runRec of Object.values(cell.runs || {})) {
       const iob = String(runRec?.iob || '').toUpperCase() || 'UNKNOWN';
       iobCounts[iob] = (iobCounts[iob] || 0) + 1;
+      if (runRec?.field) {
+        fieldNameSet.add(runRec.field);
+        roleFieldCounts[`${iob}:${runRec.field}`] = (roleFieldCounts[`${iob}:${runRec.field}`] || 0) + 1;
+      }
     }
   }
 
@@ -1937,6 +2019,7 @@ function computeEngineMetrics(data, engineId='current'){
     for (const category of benefitCategoryForText(namedRange)) {
       categoryCounts[category] = (categoryCounts[category] || 0) + 1;
     }
+    for (const domain of benefitDomainsForText(namedRange)) domainCounts[domain] = (domainCounts[domain] || 0) + 1;
   }
 
   const fieldSet = new Set();
@@ -1951,19 +2034,37 @@ function computeEngineMetrics(data, engineId='current'){
       if (iob === 'O' && runRec?.field) outputFieldSet.add(runRec.field);
     }
   }
+  const nodeCount = graph.nodes.length;
+  const edgeCount = graph.edges.length;
+  const avgFanIn = nodeCount ? [...degree.inDegree.values()].reduce((sum, value) => sum + value, 0) / nodeCount : 0;
+  const avgFanOut = nodeCount ? [...degree.outDegree.values()].reduce((sum, value) => sum + value, 0) / nodeCount : 0;
+  const disconnectedComponentCount = computeConnectedComponents(graph.nodes, graph.edges);
+  const formulaCount = Object.keys(data.formulas || {}).length;
+  const formulaDependencyDensity = nodeCount > 1 ? edgeCount / (nodeCount * (nodeCount - 1)) : 0;
+  const disconnectedComponentRatio = nodeCount ? disconnectedComponentCount / nodeCount : 0;
+  const averageFormulaNestingDepth = formulas.length ? totalFormulaNestingDepth / formulas.length : 0;
+  const averageFormulaLength = formulas.length ? totalFormulaLength / formulas.length : 0;
 
   const metrics = {
     engine_id: engineId,
     structural_metrics: {
-      node_count: graph.nodes.length,
-      edge_count: graph.edges.length,
-      formula_cell_count: Object.keys(data.formulas || {}).length,
+      node_count: nodeCount,
+      edge_count: edgeCount,
+      formula_cell_count: formulaCount,
       named_range_count: (data.namedRanges || []).length,
       max_dependency_depth: depth.maxDepth,
+      average_depth: averageFormulaNestingDepth,
+      longest_dependency_path: depth.maxDepth,
+      average_fan_in: avgFanIn,
       max_fan_in: degree.maxIn,
+      average_fan_out: avgFanOut,
       max_fan_out: degree.maxOut,
       isolated_node_count: degree.isolated,
-      disconnected_component_count: computeConnectedComponents(graph.nodes, graph.edges)
+      disconnected_component_count: disconnectedComponentCount,
+      formula_dependency_density: formulaDependencyDensity,
+      disconnected_component_ratio: disconnectedComponentRatio,
+      high_degree_hub_count: degree.hubs,
+      circularity_node_count: depth.cycleNodeCount
     },
     semantic_field_metrics: {
       source_tab_count: (data.sourceTabs || []).length,
@@ -1971,18 +2072,32 @@ function computeEngineMetrics(data, engineId='current'){
       distinct_field_count: fieldSet.size,
       distinct_input_field_count: inputFieldSet.size,
       distinct_output_field_count: outputFieldSet.size,
-      iob_role_counts: iobCounts
+      field_names: [...fieldNameSet].sort(),
+      field_description_tokens: [...fieldDescriptionTokenSet].sort(),
+      source_tabs: [...sourceTabSet].sort(),
+      run_names: [...runNameSet].sort(),
+      iob_role_counts: iobCounts,
+      role_field_counts: roleFieldCounts
     },
     formula_implementation_metrics: {
       distinct_function_count: Object.keys(functionCounts).length,
       function_counts: functionCounts,
+      function_set: Object.keys(functionCounts).sort(),
+      reference_set: [...referenceSet].sort(),
+      named_range_reference_set: [...namedRangeRefSet].sort(),
+      operator_counts: operatorCounts,
       operator_count: operatorCount,
       constant_count: constantCount,
       max_formula_nesting_depth: maxFormulaNestingDepth,
+      average_formula_nesting_depth: averageFormulaNestingDepth,
+      average_formula_length: averageFormulaLength,
+      parse_error_count: 0,
       formula_with_named_range_ref_count: formulas.filter(formula => (formula.refs || []).some(ref => (data.namedRanges || []).includes(ref))).length
     },
     benefit_architecture_metrics: {
       category_counts: categoryCounts,
+      domain_counts: domainCounts,
+      domain_set: Object.keys(domainCounts).sort(),
       has_retirement_logic: !!categoryCounts.retirement,
       has_death_logic: !!categoryCounts.death,
       has_qpsa_logic: !!categoryCounts.qpsa,
@@ -1995,9 +2110,16 @@ function computeEngineMetrics(data, engineId='current'){
     operational_data_quality_metrics: {
       unresolved_reference_count: graph.unresolvedRefs.length,
       unresolved_references_sample: graph.unresolvedRefs.slice(0, 12),
+      unresolved_named_range_count: graph.unresolvedRefs.filter(item => !isCellAddressToken(splitQualifiedToken(item.ref).local || item.ref)).length,
+      unknown_tab_reference_count: graph.unresolvedRefs.filter(item => !!splitQualifiedToken(item.ref).sheet).length,
+      parse_error_count: 0,
       empty_argument_formula_count: emptyArgumentFormulaCount,
       circularity_node_count: depth.cycleNodeCount,
-      high_degree_hub_count: degree.hubs
+      disconnected_component_count: disconnectedComponentCount,
+      isolated_node_count: degree.isolated,
+      high_degree_hub_count: degree.hubs,
+      excessive_formula_nesting_count: formulas.filter(formula => maxParenthesisDepth(formula.formula || '') >= 8).length,
+      excessive_dependency_depth_flag: depth.maxDepth >= 20
     }
   };
   metrics.rows = flattenEngineMetrics(metrics);
@@ -2015,10 +2137,396 @@ function flattenEngineMetrics(metricBundle){
   ];
 }
 
+const ENGINE_COMPARISON_CONFIG = {
+  metric_version: 'v0.7',
+  familyWeights: {
+    structural_graph: {
+      size_density: 0.20,
+      depth_path: 0.20,
+      fan_distribution: 0.25,
+      hub_centrality: 0.15,
+      component_isolation: 0.10,
+      circularity_quality: 0.10
+    },
+    semantic_field: {
+      field_name_tokens: 0.30,
+      field_descriptions: 0.25,
+      tab_run_names: 0.15,
+      iob_roles: 0.20,
+      aliases_crosswalk: 0.10
+    },
+    formula_implementation: {
+      function_set: 0.25,
+      function_frequency: 0.20,
+      references: 0.20,
+      operator_constant_profile: 0.10,
+      nesting_complexity: 0.15,
+      parse_error_profile: 0.10
+    },
+    benefit_architecture: {
+      domain_coverage: 0.35,
+      domain_frequency: 0.20,
+      person_architecture: 0.15,
+      assumptions_architecture: 0.15,
+      limitation_guarantee_architecture: 0.15
+    },
+    operational_data_quality: {
+      missing_reference_profile: 0.30,
+      unresolved_names_tabs: 0.20,
+      parse_empty_arguments: 0.20,
+      disconnected_orphan_profile: 0.15,
+      high_complexity_profile: 0.15
+    }
+  },
+  profiles: {
+    structural_similarity: {
+      structural_graph: 0.70,
+      formula_implementation: 0.10,
+      semantic_field: 0.10,
+      operational_data_quality: 0.10,
+      benefit_architecture: 0
+    },
+    formula_similarity: {
+      formula_implementation: 0.70,
+      structural_graph: 0.10,
+      semantic_field: 0.10,
+      benefit_architecture: 0.10,
+      operational_data_quality: 0
+    },
+    business_field_similarity: {
+      semantic_field: 0.60,
+      benefit_architecture: 0.25,
+      structural_graph: 0.10,
+      formula_implementation: 0.05,
+      operational_data_quality: 0
+    },
+    benefit_architecture_similarity: {
+      benefit_architecture: 0.65,
+      semantic_field: 0.15,
+      formula_implementation: 0.10,
+      structural_graph: 0.05,
+      operational_data_quality: 0.05
+    },
+    risk_complexity_similarity: {
+      operational_data_quality: 0.60,
+      structural_graph: 0.20,
+      formula_implementation: 0.10,
+      benefit_architecture: 0.10,
+      semantic_field: 0
+    },
+    overall_weighted_similarity: {
+      benefit_architecture: 0.30,
+      formula_implementation: 0.25,
+      semantic_field: 0.20,
+      structural_graph: 0.15,
+      operational_data_quality: 0.10
+    }
+  }
+};
+
+function clamp01(value){
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function hasMetricValue(value){
+  return value !== undefined && value !== null;
+}
+
+function scalarDistance(a, b){
+  const av = Number(a || 0);
+  const bv = Number(b || 0);
+  return clamp01(Math.abs(av - bv) / Math.max(Math.abs(av), Math.abs(bv), 1));
+}
+
+function booleanDistance(a, b){
+  return Boolean(a) === Boolean(b) ? 0 : 1;
+}
+
+function setDistance(a, b){
+  const setA = new Set(Array.isArray(a) ? a.map(String) : []);
+  const setB = new Set(Array.isArray(b) ? b.map(String) : []);
+  const union = new Set([...setA, ...setB]);
+  if (!union.size) return 0;
+  let intersection = 0;
+  for (const value of setA) if (setB.has(value)) intersection++;
+  return clamp01(1 - intersection / union.size);
+}
+
+function vectorDistance(a, b){
+  const vecA = a && typeof a === 'object' ? a : {};
+  const vecB = b && typeof b === 'object' ? b : {};
+  const keys = new Set([...Object.keys(vecA), ...Object.keys(vecB)]);
+  if (!keys.size) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (const key of keys) {
+    const av = Number(vecA[key] || 0);
+    const bv = Number(vecB[key] || 0);
+    dot += av * bv;
+    magA += av * av;
+    magB += bv * bv;
+  }
+  if (!magA && !magB) return 0;
+  if (!magA || !magB) return 1;
+  return clamp01(1 - dot / (Math.sqrt(magA) * Math.sqrt(magB)));
+}
+
+function textTokenDistance(a, b){
+  return setDistance(tokenizeText(a), tokenizeText(b));
+}
+
+function summarizeValue(value){
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  if (value && typeof value === 'object') return `${Object.keys(value).length} key${Object.keys(value).length === 1 ? '' : 's'}`;
+  return String(value ?? 'missing');
+}
+
+function distanceComponent(name, valueA, valueB, weight, distance, explanation, missingPolicy='penalize'){
+  return {
+    name,
+    value_a: valueA,
+    value_b: valueB,
+    distance: Number(clamp01(distance).toFixed(6)),
+    weight,
+    missingPolicy,
+    explanation
+  };
+}
+
+function makeComponent(name, valueA, valueB, weight, distanceFn, explanation, missingPolicy='penalize'){
+  const hasA = hasMetricValue(valueA);
+  const hasB = hasMetricValue(valueB);
+  if (!hasA && !hasB) {
+    return distanceComponent(name, valueA, valueB, weight, 0, `${name} unavailable for both engines; ignored.`, 'ignore');
+  }
+  if (hasA !== hasB && missingPolicy !== 'optional') {
+    return distanceComponent(name, valueA, valueB, weight, 1, `${name} unavailable for one engine; penalized as distance 1.`, missingPolicy);
+  }
+  if (hasA !== hasB && missingPolicy === 'optional') {
+    return distanceComponent(name, valueA, valueB, weight, 0, `${name} optional and unavailable for one engine; ignored.`, 'ignore');
+  }
+  const dist = distanceFn(valueA, valueB);
+  return distanceComponent(
+    name,
+    valueA,
+    valueB,
+    weight,
+    dist,
+    explanation || `${name} distance compares ${summarizeValue(valueA)} with ${summarizeValue(valueB)}.`
+  );
+}
+
+function weightedDistance(parts){
+  const active = (parts || []).filter(part => part && part.weight > 0 && part.missingPolicy !== 'ignore');
+  const weightSum = active.reduce((sum, part) => sum + Number(part.weight || 0), 0);
+  const distance = weightSum
+    ? active.reduce((sum, part) => sum + Number(part.weight || 0) * clamp01(part.distance), 0) / weightSum
+    : 0;
+  return {
+    distance: Number(clamp01(distance).toFixed(6)),
+    similarity: Number((1 - clamp01(distance)).toFixed(6)),
+    components: parts || []
+  };
+}
+
+function normalizeEngineSummary(engine){
+  return normalizeSummary(engine);
+}
+
+function extractMetricWarehouse(engine, engineId='current'){
+  const normalized = normalizeEngineSummary(engine);
+  return computeEngineMetrics(normalized, engineId || normalized.engine_name || 'current');
+}
+
+function metricGroup(metrics, group){
+  return metrics?.[group] || {};
+}
+
+function scalarGroupComponent(name, groupA, groupB, metricNames, weight, explanation){
+  const valueA = Object.fromEntries(metricNames.map(key => [key, Number(groupA[key] || 0)]));
+  const valueB = Object.fromEntries(metricNames.map(key => [key, Number(groupB[key] || 0)]));
+  return makeComponent(name, valueA, valueB, weight, vectorDistance, explanation);
+}
+
+function computeStructuralGraphDistance(metricsA, metricsB, config){
+  const weights = config.familyWeights.structural_graph;
+  const a = metricGroup(metricsA, 'structural_metrics');
+  const b = metricGroup(metricsB, 'structural_metrics');
+  return weightedDistance([
+    scalarGroupComponent('size_density', a, b, ['node_count', 'edge_count', 'formula_cell_count', 'formula_dependency_density'], weights.size_density, 'Compares graph size and dependency density.'),
+    scalarGroupComponent('depth_path', a, b, ['max_dependency_depth', 'average_depth', 'longest_dependency_path'], weights.depth_path, 'Compares graph depth and longest observed dependency path.'),
+    scalarGroupComponent('fan_distribution', a, b, ['average_fan_in', 'max_fan_in', 'average_fan_out', 'max_fan_out'], weights.fan_distribution, 'Compares fan-in and fan-out signatures.'),
+    scalarGroupComponent('hub_centrality', a, b, ['high_degree_hub_count'], weights.hub_centrality, 'Compares high-degree hub counts as a centrality proxy.'),
+    scalarGroupComponent('component_isolation', a, b, ['disconnected_component_count', 'isolated_node_count', 'disconnected_component_ratio'], weights.component_isolation, 'Compares disconnected and isolated graph structure.'),
+    scalarGroupComponent('circularity_quality', a, b, ['circularity_node_count'], weights.circularity_quality, 'Compares circular-reference indicators.')
+  ]);
+}
+
+function computeSemanticFieldDistance(metricsA, metricsB, config){
+  const weights = config.familyWeights.semantic_field;
+  const a = metricGroup(metricsA, 'semantic_field_metrics');
+  const b = metricGroup(metricsB, 'semantic_field_metrics');
+  return weightedDistance([
+    makeComponent('field_name_tokens', a.field_names || [], b.field_names || [], weights.field_name_tokens, (x, y) => setDistance(x.flatMap(tokenizeText), y.flatMap(tokenizeText)), 'Compares normalized business field-name tokens.'),
+    makeComponent('field_descriptions', a.field_description_tokens || [], b.field_description_tokens || [], weights.field_descriptions, setDistance, 'Compares field description token coverage.'),
+    makeComponent('tab_run_names', [...(a.source_tabs || []), ...(a.run_names || [])], [...(b.source_tabs || []), ...(b.run_names || [])], weights.tab_run_names, (x, y) => setDistance(x.flatMap(tokenizeText), y.flatMap(tokenizeText)), 'Compares source worksheet and run-name tokens.'),
+    makeComponent('iob_roles', a.iob_role_counts || {}, b.iob_role_counts || {}, weights.iob_roles, vectorDistance, 'Compares input/output/intermediate role frequency.'),
+    makeComponent('aliases_crosswalk', a.role_field_counts || {}, b.role_field_counts || {}, weights.aliases_crosswalk, vectorDistance, 'Compares role-to-field crosswalk signatures.')
+  ]);
+}
+
+function computeFormulaImplementationDistance(metricsA, metricsB, config){
+  const weights = config.familyWeights.formula_implementation;
+  const a = metricGroup(metricsA, 'formula_implementation_metrics');
+  const b = metricGroup(metricsB, 'formula_implementation_metrics');
+  return weightedDistance([
+    makeComponent('function_set', a.function_set || [], b.function_set || [], weights.function_set, setDistance, 'Compares the set of formula functions used.'),
+    makeComponent('function_frequency', a.function_counts || {}, b.function_counts || {}, weights.function_frequency, vectorDistance, 'Compares function frequency vectors.'),
+    makeComponent('reference_set', a.reference_set || [], b.reference_set || [], weights.references, setDistance, 'Compares cell and named-range reference coverage.'),
+    scalarGroupComponent('operator_constant_profile', a, b, ['operator_count', 'constant_count'], weights.operator_constant_profile, 'Compares operator and constant count profiles.'),
+    scalarGroupComponent('nesting_complexity', a, b, ['max_formula_nesting_depth', 'average_formula_nesting_depth', 'average_formula_length'], weights.nesting_complexity, 'Compares formula nesting and length complexity.'),
+    scalarGroupComponent('parse_error_profile', a, b, ['parse_error_count'], weights.parse_error_profile, 'Compares formula parse/error profile.')
+  ]);
+}
+
+function computeBenefitArchitectureDistance(metricsA, metricsB, config){
+  const weights = config.familyWeights.benefit_architecture;
+  const a = metricGroup(metricsA, 'benefit_architecture_metrics');
+  const b = metricGroup(metricsB, 'benefit_architecture_metrics');
+  const participantDomains = ['normal_retirement', 'early_retirement', 'late_retirement', 'deferred_vested_retirement', 'in_pay_retiree_benefits', 'beneficiary_benefits', 'alternate_payee_benefits', 'qjsa', 'qpsa', 'preretirement_death_benefit', 'postretirement_death_benefit', 'disability_benefit'];
+  const assumptionDomains = ['mortality', 'interest', 'actuarial_equivalence'];
+  const limitationDomains = ['maximum_insurance_limit', 'phase_in_limitation', 'guaranteed_benefit_limitation', 'asset_recovery_logic', 'data_quality_assumptions'];
+  return weightedDistance([
+    makeComponent('benefit_domain_coverage', a.domain_set || [], b.domain_set || [], weights.domain_coverage, setDistance, 'Compares fixed benefit-domain coverage overlap.'),
+    makeComponent('domain_frequency_counts', a.domain_counts || {}, b.domain_counts || {}, weights.domain_frequency, vectorDistance, 'Compares benefit-domain frequency/count vectors.'),
+    makeComponent('participant_beneficiary_alternate_payee_architecture', (a.domain_set || []).filter(x => participantDomains.includes(x)), (b.domain_set || []).filter(x => participantDomains.includes(x)), weights.person_architecture, setDistance, 'Compares participant, beneficiary, and alternate-payee benefit areas.'),
+    makeComponent('actuarial_assumption_architecture', (a.domain_set || []).filter(x => assumptionDomains.includes(x)), (b.domain_set || []).filter(x => assumptionDomains.includes(x)), weights.assumptions_architecture, setDistance, 'Compares mortality, interest, and actuarial-equivalence architecture.'),
+    makeComponent('limitation_guarantee_architecture', (a.domain_set || []).filter(x => limitationDomains.includes(x)), (b.domain_set || []).filter(x => limitationDomains.includes(x)), weights.limitation_guarantee_architecture, setDistance, 'Compares limitation, guarantee, asset/recovery, and data-quality assumption logic.')
+  ]);
+}
+
+function computeOperationalDataQualityDistance(metricsA, metricsB, config){
+  const weights = config.familyWeights.operational_data_quality;
+  const a = metricGroup(metricsA, 'operational_data_quality_metrics');
+  const b = metricGroup(metricsB, 'operational_data_quality_metrics');
+  return weightedDistance([
+    scalarGroupComponent('broken_missing_reference_profile', a, b, ['unresolved_reference_count'], weights.missing_reference_profile, 'Compares missing or broken reference counts.'),
+    scalarGroupComponent('unresolved_named_ranges_unknown_tabs', a, b, ['unresolved_named_range_count', 'unknown_tab_reference_count'], weights.unresolved_names_tabs, 'Compares unresolved named ranges and unknown-tab references.'),
+    scalarGroupComponent('parse_errors_empty_arguments', a, b, ['parse_error_count', 'empty_argument_formula_count'], weights.parse_empty_arguments, 'Compares parse errors and formulas with empty arguments.'),
+    scalarGroupComponent('disconnected_orphan_component_profile', a, b, ['disconnected_component_count', 'isolated_node_count'], weights.disconnected_orphan_profile, 'Compares disconnected components and orphan/island nodes.'),
+    scalarGroupComponent('high_complexity_warning_profile', a, b, ['high_degree_hub_count', 'excessive_formula_nesting_count', 'excessive_dependency_depth_flag'], weights.high_complexity_profile, 'Compares high-complexity warning indicators.')
+  ]);
+}
+
+function computeFamilyDistances(metricsA, metricsB, config=ENGINE_COMPARISON_CONFIG){
+  return {
+    structural_graph: computeStructuralGraphDistance(metricsA, metricsB, config),
+    semantic_field: computeSemanticFieldDistance(metricsA, metricsB, config),
+    formula_implementation: computeFormulaImplementationDistance(metricsA, metricsB, config),
+    benefit_architecture: computeBenefitArchitectureDistance(metricsA, metricsB, config),
+    operational_data_quality: computeOperationalDataQualityDistance(metricsA, metricsB, config)
+  };
+}
+
+function computeProfileScores(familyDistances, config=ENGINE_COMPARISON_CONFIG){
+  const scores = {};
+  for (const [profileName, weights] of Object.entries(config.profiles || {})) {
+    const components = Object.entries(weights).map(([familyName, weight]) => {
+      const family = familyDistances[familyName];
+      return distanceComponent(familyName, family?.distance, null, weight, family?.distance || 0, `${profileName} uses ${familyName} distance at weight ${weight}.`, family ? 'penalize' : 'ignore');
+    });
+    const aggregate = weightedDistance(components);
+    scores[profileName] = {
+      distance: aggregate.distance,
+      similarity: aggregate.similarity,
+      weights: { ...weights },
+      components
+    };
+  }
+  return scores;
+}
+
+function explainTopDifferences(comparisonReport, limit=10){
+  const rows = [];
+  for (const [familyName, family] of Object.entries(comparisonReport.family_distances || {})) {
+    for (const component of family.components || []) {
+      rows.push({
+        family: familyName,
+        name: component.name,
+        distance: component.distance,
+        weight: component.weight,
+        impact: Number((component.distance * component.weight).toFixed(6)),
+        value_a: component.value_a,
+        value_b: component.value_b,
+        explanation: component.explanation
+      });
+    }
+  }
+  return rows
+    .filter(row => row.impact > 0)
+    .sort((a, b) => b.impact - a.impact || b.distance - a.distance || a.name.localeCompare(b.name))
+    .slice(0, limit);
+}
+
+function missingMetricReport(familyDistances){
+  const missing = [];
+  for (const [familyName, family] of Object.entries(familyDistances || {})) {
+    for (const component of family.components || []) {
+      if (component.missingPolicy === 'ignore' || /unavailable/.test(component.explanation || '')) {
+        missing.push({
+          family: familyName,
+          name: component.name,
+          policy: component.missingPolicy,
+          explanation: component.explanation
+        });
+      }
+    }
+  }
+  return missing;
+}
+
+function compareMetricWarehouses(metricsA, metricsB, config=ENGINE_COMPARISON_CONFIG){
+  const familyDistances = computeFamilyDistances(metricsA, metricsB, config);
+  const report = {
+    engine_a_id: metricsA?.engine_id || 'E1',
+    engine_b_id: metricsB?.engine_id || 'E2',
+    metric_version: config.metric_version || 'v0.7',
+    family_distances: familyDistances,
+    profile_scores: computeProfileScores(familyDistances, config),
+    top_differences: [],
+    warnings: [],
+    missing_metric_report: missingMetricReport(familyDistances)
+  };
+  report.top_differences = explainTopDifferences(report, 12);
+  return report;
+}
+
+function compareEngines(engineA, engineB, config=ENGINE_COMPARISON_CONFIG){
+  const metricsA = extractMetricWarehouse(engineA, engineA?.engine_id || engineA?.engine_name || 'E1');
+  const metricsB = extractMetricWarehouse(engineB, engineB?.engine_id || engineB?.engine_name || 'E2');
+  return compareMetricWarehouses(metricsA, metricsB, config);
+}
+
 function computeCurrentEngineMetrics(){
   return computeEngineMetrics(DATA, datasetDisplayName(DATA, 'current'));
 }
 
+window.ENGINE_COMPARISON_CONFIG = ENGINE_COMPARISON_CONFIG;
+window.normalizeEngineSummary = normalizeEngineSummary;
+window.extractMetricWarehouse = extractMetricWarehouse;
+window.scalarDistance = scalarDistance;
+window.booleanDistance = booleanDistance;
+window.setDistance = setDistance;
+window.vectorDistance = vectorDistance;
+window.textTokenDistance = textTokenDistance;
+window.weightedDistance = weightedDistance;
+window.computeFamilyDistances = computeFamilyDistances;
+window.computeProfileScores = computeProfileScores;
+window.compareMetricWarehouses = compareMetricWarehouses;
+window.compareEngines = compareEngines;
+window.explainTopDifferences = explainTopDifferences;
 window.computeEngineMetrics = computeEngineMetrics;
 window.flattenEngineMetrics = flattenEngineMetrics;
 window.computeCurrentEngineMetrics = computeCurrentEngineMetrics;
