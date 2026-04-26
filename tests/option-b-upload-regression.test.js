@@ -362,3 +362,156 @@ test('run selection does not borrow formulas from cells missing that run entry',
   assert.equal(forcedStaleState.treeText, 'No formula exists for this selected source tab and run.');
   assert.deepEqual(forcedStaleState.graphNodes, ['GU2']);
 });
+
+test('quoted named range formula renders named range precedent', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const data = {
+    schema_version: 'named-range-regression',
+    engine_name: 'Named Range Regression',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    cells: {
+      'Separated::IE2': {
+        key: 'Separated::IE2',
+        sourceTab: 'Separated',
+        cell: 'IE2',
+        genericField: 'AEQ_INTEREST',
+        description: 'Interest Rate Range Name',
+        hasFormula: true,
+        runs: { XRD: { field: 'AEQ_INTEREST', iob: 'O' } }
+      }
+    },
+    formulas: {
+      'Separated::IE2': {
+        key: 'Separated::IE2',
+        sourceTab: 'Separated',
+        cell: 'IE2',
+        sheet: 'Separated',
+        formula: '"Plan_INT"',
+        refs: [],
+        functions: []
+      }
+    },
+    formulaCells: ['Separated::IE2'],
+    namedRanges: ['Plan_Int']
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function selectedText(id){ const el = document.getElementById(id); return el?.selectedOptions?.[0]?.textContent?.trim() || ''; }
+  function graphNodes(){ return Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(n => n.dataset.cell); }
+  try {
+    const input = document.getElementById('load-json-input');
+    const file = new File([JSON.stringify(${JSON.stringify(data)})], 'named-range.json', { type: 'application/json' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 600));
+    result.ok = true;
+    result.checks = {
+      root: selectedText('root-select'),
+      run: document.getElementById('run-select').value,
+      treeText: document.getElementById('tree-stage').textContent.trim(),
+      graphNodes: graphNodes()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})();
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'named-range-');
+
+  assert.equal(payload.checks.root, 'AEQ_INTEREST  ·  Tab: Separated  ·  IE2');
+  assert.equal(payload.checks.run, 'XRD');
+  assert.match(payload.checks.treeText, /Plan_Int/);
+  assert.ok(payload.checks.graphNodes.includes('IE2'));
+  assert.ok(payload.checks.graphNodes.includes('Plan_Int'));
+});
+
+test('sample 4 AEQ_INTEREST renders Plan_Int named range precedent', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const sample4Text = fs.readFileSync(
+    path.join(repoRoot, 'data', 'private', 'raw-v1-engines', 'sample-4-v1Summary.json'),
+    'utf8'
+  ).replace(/^\uFEFF/, '');
+  const sample4 = JSON.parse(sample4Text);
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function selectedText(id){ const el = document.getElementById(id); return el?.selectedOptions?.[0]?.textContent?.trim() || ''; }
+  function graphNodes(){ return Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(n => n.dataset.cell); }
+  try {
+    const input = document.getElementById('load-json-input');
+    const file = new File([JSON.stringify(${JSON.stringify(sample4)})], 'sample-4-v1Summary.json', { type: 'application/json' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 900));
+
+    const source = document.getElementById('source-tab-select');
+    source.value = 'Separated';
+    source.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    const root = document.getElementById('root-select');
+    const option = Array.from(root.options).find(o => /^AEQ_INTEREST\\s/.test(o.textContent));
+    if (!option) throw new Error('AEQ_INTEREST option was not found');
+    root.value = option.value;
+    root.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    const run = document.getElementById('run-select');
+    if (Array.from(run.options).some(o => o.value === 'XRD')) {
+      run.value = 'XRD';
+      run.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    result.ok = true;
+    result.checks = {
+      root: selectedText('root-select'),
+      run: document.getElementById('run-select').value,
+      treeText: document.getElementById('tree-stage').textContent.trim(),
+      graphNodes: graphNodes()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})();
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'sample-4-aeq-');
+
+  assert.match(payload.checks.root, /^AEQ_INTEREST\s+·\s+Tab: Separated\s+·\s+IE2$/);
+  assert.equal(payload.checks.run, 'XRD');
+  assert.match(payload.checks.treeText, /Plan_Int/);
+  assert.ok(payload.checks.graphNodes.includes('Separated!IE2'));
+  assert.ok(payload.checks.graphNodes.includes('Plan_Int'));
+});

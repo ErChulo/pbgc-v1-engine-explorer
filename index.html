@@ -729,6 +729,15 @@ function normalizeNamedRangeId(rawToken){
   return parts.sheet ? `${parts.sheet}!${local}` : local;
 }
 
+function unquoteSimpleFormulaValue(formula){
+  let text = String(formula || '').trim();
+  if (text.startsWith('=')) text = text.slice(1).trim();
+  if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
+    text = text.slice(1, -1).replace(/""/g, '"').trim();
+  }
+  return text;
+}
+
 function extractCellRefs(formulaText){
   const clean = stripQuotedStrings(formulaText);
   const matches = clean.match(/(?:'[^']+'!|[A-Za-z_][A-Za-z0-9_.]*!)?\$?[A-Z]{1,3}\$?\d+/g) || [];
@@ -752,10 +761,11 @@ function extractFunctions(formulaText){
 
 function inferNamedRefsFromFormulaText(formula, namedRanges){
   const clean = stripQuotedStrings(formula || '');
+  const simpleValue = unquoteSimpleFormulaValue(formula);
   const hits = [];
   for (const rangeName of namedRanges || []) {
-    const re = new RegExp('(^|[^A-Za-z0-9_])' + escapeRegex(rangeName) + '($|[^A-Za-z0-9_])');
-    if (re.test(clean)) hits.push(rangeName);
+    const re = new RegExp('(^|[^A-Za-z0-9_])' + escapeRegex(rangeName) + '($|[^A-Za-z0-9_])', 'i');
+    if (re.test(clean) || simpleValue.toLowerCase() === String(rangeName).toLowerCase()) hits.push(rangeName);
   }
   return hits;
 }
@@ -807,14 +817,6 @@ function normalizeSummary(raw){
     return qualifiedCells.has(localCell) && sheetName ? `${sheetName}!${localCell}` : localCell;
   }
 
-  function canonicalRefId(rawRef, sheetHint=''){
-    const explicit = splitQualifiedToken(rawRef);
-    const local = String(explicit.local || '').trim();
-    if (!local) return '';
-    if (isCellAddressToken(local)) return canonicalCellId(local, explicit.sheet || sheetHint || '');
-    return normalizeNamedRangeId(rawRef) || local;
-  }
-
   const namedRanges = uniqueStringArray([
     ...asStringArray(source.namedRanges).map(normalizeNamedRangeId),
     ...worksheetEntries.flatMap(([sheetName, worksheet]) =>
@@ -822,6 +824,24 @@ function normalizeSummary(raw){
         .map(name => normalizeNamedRangeId(splitQualifiedToken(name).sheet ? name : `${sheetName}!${name}`))
     )
   ]);
+  const namedRangeLookup = new Map(namedRanges.map(name => [String(name).toLowerCase(), name]));
+  function canonicalNamedRangeId(rawRef){
+    const normalized = normalizeNamedRangeId(rawRef);
+    return namedRangeLookup.get(String(normalized).toLowerCase()) || normalized;
+  }
+  function inferCanonicalNamedRefs(formulaText){
+    return inferNamedRefsFromFormulaText(formulaText, namedRanges)
+      .map(canonicalNamedRangeId)
+      .filter(Boolean);
+  }
+
+  function canonicalRefId(rawRef, sheetHint=''){
+    const explicit = splitQualifiedToken(rawRef);
+    const local = String(explicit.local || '').trim();
+    if (!local) return '';
+    if (isCellAddressToken(local)) return canonicalCellId(local, explicit.sheet || sheetHint || '');
+    return canonicalNamedRangeId(rawRef) || local;
+  }
 
   const cells = {};
   function upsertCell(cellId, rec, sheetName=''){
@@ -874,7 +894,7 @@ function normalizeSummary(raw){
       : (Array.isArray(rec?.references) ? rec.references : extractCellRefs(formulaText));
     const refs = uniqueStringArray([
       ...explicitRefs.map(ref => canonicalRefId(ref, sheetName)).filter(Boolean),
-      ...inferNamedRefsFromFormulaText(formulaText, namedRanges).map(ref => canonicalRefId(ref, sheetName)).filter(Boolean)
+      ...inferCanonicalNamedRefs(formulaText)
     ]);
     const functions = uniqueStringArray(Array.isArray(rec?.functions) ? rec.functions : extractFunctions(formulaText));
     formulas[cellId] = {
@@ -1321,10 +1341,11 @@ function inferredNamedRangeRefs(nodeId){
   const formula = DATA.formulas[nodeId]?.formula || '';
   if (!formula || !Array.isArray(DATA.namedRanges) || !DATA.namedRanges.length) return [];
   const haystack = stripQuotedStrings(formula);
+  const simpleValue = unquoteSimpleFormulaValue(formula);
   const matches = [];
   for (const rangeName of DATA.namedRanges) {
-    const re = new RegExp('(^|[^A-Za-z0-9_])' + escapeRegex(rangeName) + '($|[^A-Za-z0-9_])');
-    if (re.test(haystack)) matches.push(rangeName);
+    const re = new RegExp('(^|[^A-Za-z0-9_])' + escapeRegex(rangeName) + '($|[^A-Za-z0-9_])', 'i');
+    if (re.test(haystack) || simpleValue.toLowerCase() === String(rangeName).toLowerCase()) matches.push(rangeName);
   }
   return matches;
 }
@@ -2190,6 +2211,15 @@ function renderTree(){
   pre.className = 'formula-root';
   pre.appendChild(renderBeautified(ast, 0));
   treeStage.appendChild(pre);
+
+  const precedentRefs = refsFor(cell);
+  if (precedentRefs.length) {
+    const refsLine = document.createElement('div');
+    refsLine.className = 'subtle';
+    refsLine.style.marginTop = '10px';
+    refsLine.textContent = `Precedents: ${precedentRefs.map(preferredLabelForNode).join(', ')}`;
+    treeStage.appendChild(refsLine);
+  }
 
   if (ast.__emptyArgCount > 0) {
     const legend = document.createElement('div');
