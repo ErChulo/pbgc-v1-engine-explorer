@@ -1,0 +1,238 @@
+Attribute VB_Name = "modV1Row2FormulaReport"
+Option Explicit
+
+Public Const V1_ROW2_FORMULA_REPORT_SHEET As String = "V1_Row2_Formulas"
+Public Const V1_ENGINE_FORMULA_ROW As Long = 2
+
+Public Sub CreateV1Row2FormulaReport()
+
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim reportWs As Worksheet
+    Dim formulaCells As Range
+    Dim area As Range
+    Dim c As Range
+
+    Dim outRow As Long
+    Dim formulaCount As Long
+    Dim scannedSheetCount As Long
+
+    Dim oldScreenUpdating As Boolean
+    Dim oldEnableEvents As Boolean
+    Dim oldDisplayAlerts As Boolean
+    Dim oldStatusBar As Variant
+
+    On Error GoTo Fail
+
+    Set wb = ActiveWorkbook
+
+    If wb Is Nothing Then
+        Err.Raise vbObjectError + 6000, , "No active workbook found."
+    End If
+
+    oldScreenUpdating = Application.ScreenUpdating
+    oldEnableEvents = Application.EnableEvents
+    oldDisplayAlerts = Application.DisplayAlerts
+    oldStatusBar = Application.StatusBar
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    Application.StatusBar = "Creating V1 row-2 formula report..."
+
+    DeleteWorksheetIfExists wb, V1_ROW2_FORMULA_REPORT_SHEET
+
+    Set reportWs = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    reportWs.Name = V1_ROW2_FORMULA_REPORT_SHEET
+
+    WriteFormulaReportHeaders reportWs
+    reportWs.Columns("A:C").NumberFormat = "@"
+
+    outRow = 2
+
+    For Each ws In wb.Worksheets
+
+        If ShouldScanWorksheet(ws) Then
+
+            scannedSheetCount = scannedSheetCount + 1
+            Application.StatusBar = "Scanning row " & V1_ENGINE_FORMULA_ROW & " in sheet: " & ws.Name
+
+            Set formulaCells = Nothing
+
+            On Error Resume Next
+            Set formulaCells = ws.Rows(V1_ENGINE_FORMULA_ROW).SpecialCells(xlCellTypeFormulas)
+            On Error GoTo Fail
+
+            If Not formulaCells Is Nothing Then
+
+                For Each area In formulaCells.Areas
+                    For Each c In area.cells
+
+                        WriteFormulaReportRow _
+                            reportWs:=reportWs, _
+                            outRow:=outRow, _
+                            sourceWs:=ws, _
+                            formulaCell:=c
+
+                        outRow = outRow + 1
+                        formulaCount = formulaCount + 1
+
+                    Next c
+                Next area
+
+            End If
+
+        End If
+
+    Next ws
+
+    With reportWs
+        .Rows(1).Font.Bold = True
+        .Columns("A:C").AutoFit
+
+        If outRow > 2 Then
+            .Range("A1:C1").AutoFilter
+        End If
+    End With
+
+CleanExit:
+    Application.StatusBar = oldStatusBar
+    Application.DisplayAlerts = oldDisplayAlerts
+    Application.EnableEvents = oldEnableEvents
+    Application.ScreenUpdating = oldScreenUpdating
+
+    Debug.Print "V1 row-2 formula report complete."
+    Debug.Print "Workbook: " & wb.Name
+    Debug.Print "Visible sheets scanned: " & scannedSheetCount
+    Debug.Print "Formulas found in row " & V1_ENGINE_FORMULA_ROW & ": " & formulaCount
+    Debug.Print "Report sheet: " & V1_ROW2_FORMULA_REPORT_SHEET
+
+    Exit Sub
+
+Fail:
+    Application.StatusBar = oldStatusBar
+    Application.DisplayAlerts = oldDisplayAlerts
+    Application.EnableEvents = oldEnableEvents
+    Application.ScreenUpdating = oldScreenUpdating
+
+    Err.Raise Err.Number, "CreateV1Row2FormulaReport", Err.Description
+
+End Sub
+
+Private Sub WriteFormulaReportHeaders(ByVal reportWs As Worksheet)
+
+    With reportWs
+        .cells(1, 1).value = "SOURCE_TAB"
+        .cells(1, 2).value = "CELL_ADDRESS"
+        .cells(1, 3).value = "FORMULA"
+    End With
+
+End Sub
+
+Private Sub WriteFormulaReportRow( _
+    ByVal reportWs As Worksheet, _
+    ByVal outRow As Long, _
+    ByVal sourceWs As Worksheet, _
+    ByVal formulaCell As Range)
+
+    With reportWs
+        .cells(outRow, 1).value = CleanText(sourceWs.Name)
+        .cells(outRow, 2).value = CleanText(Row2Address(sourceWs, formulaCell.Column))
+        .cells(outRow, 3).value = CleanFormulaText(formulaCell.Formula)
+    End With
+
+End Sub
+
+Private Function ShouldScanWorksheet(ByVal ws As Worksheet) As Boolean
+
+    If ws.Visible <> xlSheetVisible Then
+        ShouldScanWorksheet = False
+        Exit Function
+    End If
+
+    If IsGeneratedV1ReportSheet(ws.Name) Then
+        ShouldScanWorksheet = False
+        Exit Function
+    End If
+
+    ShouldScanWorksheet = True
+
+End Function
+
+Private Function IsGeneratedV1ReportSheet(ByVal sheetName As String) As Boolean
+
+    Select Case UCase$(CleanText(sheetName))
+
+        Case UCase$(V1_ROW2_FORMULA_REPORT_SHEET), _
+             "V1_CELL_FIELD_RELATION", _
+             "V1_NAMED_RANGES"
+
+            IsGeneratedV1ReportSheet = True
+
+        Case Else
+
+            IsGeneratedV1ReportSheet = False
+
+    End Select
+
+End Function
+
+Private Function Row2Address( _
+    ByVal ws As Worksheet, _
+    ByVal sourceColumn As Long) As String
+
+    Row2Address = ws.cells(V1_ENGINE_FORMULA_ROW, sourceColumn).Address( _
+        RowAbsolute:=False, _
+        ColumnAbsolute:=False)
+
+End Function
+
+Private Function CleanFormulaText(ByVal formulaText As String) As String
+
+    Dim s As String
+
+    s = CleanText(CStr(formulaText))
+
+    If Left$(s, 1) = "=" Then
+        s = Mid$(s, 2)
+    End If
+
+    CleanFormulaText = CleanText(s)
+
+End Function
+
+Private Function CleanText(ByVal textValue As String) As String
+
+    Dim s As String
+
+    s = CStr(textValue)
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    s = Replace(s, vbTab, " ")
+    s = Trim$(s)
+
+    Do While InStr(1, s, "  ", vbBinaryCompare) > 0
+        s = Replace(s, "  ", " ")
+    Loop
+
+    CleanText = s
+
+End Function
+
+Private Sub DeleteWorksheetIfExists( _
+    ByVal wb As Workbook, _
+    ByVal sheetName As String)
+
+    Dim ws As Worksheet
+
+    For Each ws In wb.Worksheets
+
+        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then
+            ws.Delete
+            Exit Sub
+        End If
+
+    Next ws
+
+End Sub
+

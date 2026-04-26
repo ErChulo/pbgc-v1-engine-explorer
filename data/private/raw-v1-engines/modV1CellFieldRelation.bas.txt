@@ -1,0 +1,986 @@
+Attribute VB_Name = "modV1CellFieldRelation"
+Option Explicit
+
+Public Const V1_CELL_FIELD_RELATION_SHEET As String = "V1_Cell_Field_Relation"
+Public Const V1_SINGLE_RUN_NAME As String = "Single Run"
+
+' Set to True if you want:
+' DESCRIPTION = <description text> & " at " & <run name>
+Public Const V1_APPEND_RUN_TO_DESCRIPTION As Boolean = False
+
+Private Type CellFieldBlock
+    iobRow As Long
+    fieldRow As Long
+    labelCol As Long
+    explicitRunName As String
+End Type
+
+Public Sub CreateWorkbookCellFieldRelation()
+
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim reportWs As Worksheet
+    Dim blocks() As CellFieldBlock
+    Dim blockCount As Long
+    Dim relationCount As Long
+    Dim outRow As Long
+
+    Dim oldScreenUpdating As Boolean
+    Dim oldEnableEvents As Boolean
+    Dim oldDisplayAlerts As Boolean
+    Dim oldStatusBar As Variant
+
+    On Error GoTo Fail
+
+    Set wb = ActiveWorkbook
+
+    If wb Is Nothing Then
+        Err.Raise vbObjectError + 5000, , "No active workbook found."
+    End If
+
+    oldScreenUpdating = Application.ScreenUpdating
+    oldEnableEvents = Application.EnableEvents
+    oldDisplayAlerts = Application.DisplayAlerts
+    oldStatusBar = Application.StatusBar
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    Application.StatusBar = "Creating workbook-level V1 Cell-Field Relation..."
+
+    DeleteWorksheetIfExists wb, V1_CELL_FIELD_RELATION_SHEET
+
+    Set reportWs = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    reportWs.Name = V1_CELL_FIELD_RELATION_SHEET
+
+    WriteCellFieldRelationHeaders reportWs
+    reportWs.Columns("A:F").NumberFormat = "@"
+
+    outRow = 2
+
+    For Each ws In wb.Worksheets
+
+        If Not IsGeneratedV1ReportSheet(ws.Name) Then
+
+            Application.StatusBar = "Scanning sheet: " & ws.Name
+
+            blockCount = DetectCellFieldBlocks(ws, blocks)
+
+            If blockCount > 0 Then
+                relationCount = relationCount + AppendBlocksToReport( _
+                    ws:=ws, _
+                    reportWs:=reportWs, _
+                    blocks:=blocks, _
+                    blockCount:=blockCount, _
+                    outRow:=outRow)
+            End If
+
+        End If
+
+    Next ws
+
+    With reportWs
+        .Rows(1).Font.Bold = True
+        .Columns("A:F").AutoFit
+        .Range("A1:F1").AutoFilter
+    End With
+
+CleanExit:
+    Application.StatusBar = oldStatusBar
+    Application.DisplayAlerts = oldDisplayAlerts
+    Application.EnableEvents = oldEnableEvents
+    Application.ScreenUpdating = oldScreenUpdating
+
+    Debug.Print "Workbook-level V1 Cell-Field Relation complete."
+    Debug.Print "Workbook: " & wb.Name
+    Debug.Print "Relations created: " & relationCount
+    Debug.Print "Report sheet: " & V1_CELL_FIELD_RELATION_SHEET
+
+    Exit Sub
+
+Fail:
+    Application.StatusBar = oldStatusBar
+    Application.DisplayAlerts = oldDisplayAlerts
+    Application.EnableEvents = oldEnableEvents
+    Application.ScreenUpdating = oldScreenUpdating
+
+    Err.Raise Err.Number, "CreateWorkbookCellFieldRelation", Err.Description
+
+End Sub
+
+Private Function DetectCellFieldBlocks( _
+    ByVal ws As Worksheet, _
+    ByRef blocks() As CellFieldBlock) As Long
+
+    Dim usedRng As Range
+    Dim data As Variant
+    Dim r As Long
+    Dim labelCol As Long
+    Dim n As Long
+    Dim iobLabel As String
+    Dim fieldLabel As String
+
+    Set usedRng = ws.UsedRange
+
+    If usedRng.Rows.Count < 2 Or usedRng.Columns.Count < 2 Then
+        DetectCellFieldBlocks = 0
+        Exit Function
+    End If
+
+    data = usedRng.Value2
+
+    ReDim blocks(1 To 1)
+    n = 0
+
+    For r = 1 To UBound(data, 1) - 1
+
+        For labelCol = 1 To UBound(data, 2)
+
+            iobLabel = CellText(data(r, labelCol))
+            fieldLabel = CellText(data(r + 1, labelCol))
+
+            If IsIOBLabel(iobLabel) And IsFieldNameLabel(fieldLabel) Then
+
+                n = n + 1
+
+                If n > UBound(blocks) Then
+                    ReDim Preserve blocks(1 To n * 2)
+                End If
+
+                blocks(n).iobRow = usedRng.Row + r - 1
+                blocks(n).fieldRow = usedRng.Row + r
+                blocks(n).labelCol = usedRng.Column + labelCol - 1
+                blocks(n).explicitRunName = ExtractExplicitRunName(iobLabel, fieldLabel)
+
+            End If
+
+        Next labelCol
+
+    Next r
+
+    If n > 0 Then
+        ReDim Preserve blocks(1 To n)
+    End If
+
+    DetectCellFieldBlocks = n
+
+End Function
+
+Private Function AppendBlocksToReport( _
+    ByVal ws As Worksheet, _
+    ByVal reportWs As Worksheet, _
+    ByRef blocks() As CellFieldBlock, _
+    ByVal blockCount As Long, _
+    ByRef outRow As Long) As Long
+
+    Dim i As Long
+    Dim c As Long
+    Dim lastDataCol As Long
+    Dim runName As String
+    Dim iobValue As String
+    Dim fieldName As String
+    Dim descriptionBase As String
+    Dim descriptionText As String
+    Dim cellAddress As String
+    Dim relationsAdded As Long
+    Dim populatedBlockCount As Long
+    Dim descriptionRow As Long
+
+    populatedBlockCount = CountPopulatedBlocks(ws, blocks, blockCount)
+
+    If populatedBlockCount = 0 Then
+        AppendBlocksToReport = 0
+        Exit Function
+    End If
+
+    descriptionRow = FindSharedDescriptionRow(ws, blocks, blockCount)
+
+    Debug.Print "Sheet: " & ws.Name
+    Debug.Print "Detected blocks: " & blockCount
+    Debug.Print "Populated blocks: " & populatedBlockCount
+    Debug.Print "Description row: " & descriptionRow
+
+    For i = 1 To blockCount
+
+        If Not BlockHasRelationPairs(ws, blocks(i)) Then
+            GoTo NextBlock
+        End If
+
+        runName = ResolveRunNameOrBlank( _
+            explicitRunName:=blocks(i).explicitRunName, _
+            populatedBlockCountOnSheet:=populatedBlockCount)
+
+        If Len(runName) = 0 Then
+            Debug.Print "Skipped populated block with missing run name."
+            Debug.Print "Sheet: " & ws.Name
+            Debug.Print "Block index: " & i
+            Debug.Print "I/O/B row: " & blocks(i).iobRow
+            Debug.Print "Field row: " & blocks(i).fieldRow
+            GoTo NextBlock
+        End If
+
+        lastDataCol = LastUsedColumnForBlock( _
+            ws:=ws, _
+            iobRow:=blocks(i).iobRow, _
+            fieldRow:=blocks(i).fieldRow, _
+            descriptionRow:=descriptionRow)
+
+        For c = blocks(i).labelCol + 1 To lastDataCol
+
+            iobValue = CellText(ws.cells(blocks(i).iobRow, c).Value2)
+            fieldName = CellText(ws.cells(blocks(i).fieldRow, c).Value2)
+
+            If Len(iobValue) > 0 And Len(fieldName) > 0 Then
+
+                If descriptionRow > 0 Then
+                    descriptionBase = CellText(ws.cells(descriptionRow, c).Value2)
+                Else
+                    descriptionBase = vbNullString
+                End If
+
+                descriptionText = BuildDescription(descriptionBase, fieldName, runName)
+                cellAddress = Row2Address(ws, c)
+
+                reportWs.cells(outRow, 1).value = CleanText(ws.Name)
+                reportWs.cells(outRow, 2).value = CleanText(cellAddress)
+                reportWs.cells(outRow, 3).value = CleanText(runName)
+                reportWs.cells(outRow, 4).value = CleanText(fieldName)
+                reportWs.cells(outRow, 5).value = CleanText(iobValue)
+                reportWs.cells(outRow, 6).value = CleanText(descriptionText)
+
+                outRow = outRow + 1
+                relationsAdded = relationsAdded + 1
+
+            End If
+
+        Next c
+
+NextBlock:
+    Next i
+
+    AppendBlocksToReport = relationsAdded
+
+End Function
+
+Private Function FindSharedDescriptionRow( _
+    ByVal ws As Worksheet, _
+    ByRef blocks() As CellFieldBlock, _
+    ByVal blockCount As Long) As Long
+
+    Dim usedRng As Range
+    Dim maxFieldRow As Long
+    Dim r As Long
+    Dim c As Long
+    Dim i As Long
+    Dim firstUsedRow As Long
+    Dim lastUsedRow As Long
+    Dim firstUsedCol As Long
+    Dim lastUsedCol As Long
+    Dim labelText As String
+
+    Set usedRng = ws.UsedRange
+
+    firstUsedRow = usedRng.Row
+    lastUsedRow = usedRng.Row + usedRng.Rows.Count - 1
+    firstUsedCol = usedRng.Column
+    lastUsedCol = usedRng.Column + usedRng.Columns.Count - 1
+
+    maxFieldRow = 0
+
+    For i = 1 To blockCount
+        If blocks(i).fieldRow > maxFieldRow Then
+            maxFieldRow = blocks(i).fieldRow
+        End If
+    Next i
+
+    For r = maxFieldRow + 1 To lastUsedRow
+
+        For c = firstUsedCol To lastUsedCol
+
+            labelText = CellText(ws.cells(r, c).Value2)
+
+            If IsDescriptionLabel(labelText) Then
+                FindSharedDescriptionRow = r
+                Exit Function
+            End If
+
+        Next c
+
+    Next r
+
+    For r = firstUsedRow To lastUsedRow
+
+        For c = firstUsedCol To lastUsedCol
+
+            labelText = CellText(ws.cells(r, c).Value2)
+
+            If IsDescriptionLabel(labelText) Then
+                FindSharedDescriptionRow = r
+                Exit Function
+            End If
+
+        Next c
+
+    Next r
+
+    FindSharedDescriptionRow = 0
+
+End Function
+
+Private Function CountPopulatedBlocks( _
+    ByVal ws As Worksheet, _
+    ByRef blocks() As CellFieldBlock, _
+    ByVal blockCount As Long) As Long
+
+    Dim i As Long
+    Dim n As Long
+
+    For i = 1 To blockCount
+        If BlockHasRelationPairs(ws, blocks(i)) Then
+            n = n + 1
+        End If
+    Next i
+
+    CountPopulatedBlocks = n
+
+End Function
+
+Private Function BlockHasRelationPairs( _
+    ByVal ws As Worksheet, _
+    ByRef block As CellFieldBlock) As Boolean
+
+    Dim c As Long
+    Dim lastDataCol As Long
+    Dim iobValue As String
+    Dim fieldName As String
+
+    lastDataCol = LastUsedColumnForBlock( _
+        ws:=ws, _
+        iobRow:=block.iobRow, _
+        fieldRow:=block.fieldRow, _
+        descriptionRow:=0)
+
+    For c = block.labelCol + 1 To lastDataCol
+
+        iobValue = CellText(ws.cells(block.iobRow, c).Value2)
+        fieldName = CellText(ws.cells(block.fieldRow, c).Value2)
+
+        If Len(iobValue) > 0 And Len(fieldName) > 0 Then
+            BlockHasRelationPairs = True
+            Exit Function
+        End If
+
+    Next c
+
+    BlockHasRelationPairs = False
+
+End Function
+
+Private Function LastUsedColumnForBlock( _
+    ByVal ws As Worksheet, _
+    ByVal iobRow As Long, _
+    ByVal fieldRow As Long, _
+    ByVal descriptionRow As Long) As Long
+
+    Dim lastCol As Long
+    Dim candidate As Long
+
+    lastCol = ws.cells(iobRow, ws.Columns.Count).End(xlToLeft).Column
+
+    candidate = ws.cells(fieldRow, ws.Columns.Count).End(xlToLeft).Column
+    If candidate > lastCol Then lastCol = candidate
+
+    If descriptionRow > 0 Then
+        candidate = ws.cells(descriptionRow, ws.Columns.Count).End(xlToLeft).Column
+        If candidate > lastCol Then lastCol = candidate
+    End If
+
+    LastUsedColumnForBlock = lastCol
+
+End Function
+
+Private Function ResolveRunNameOrBlank( _
+    ByVal explicitRunName As String, _
+    ByVal populatedBlockCountOnSheet As Long) As String
+
+    explicitRunName = CleanText(explicitRunName)
+
+    If populatedBlockCountOnSheet = 1 Then
+        ResolveRunNameOrBlank = V1_SINGLE_RUN_NAME
+        Exit Function
+    End If
+
+    If Len(explicitRunName) > 0 Then
+        ResolveRunNameOrBlank = explicitRunName
+        Exit Function
+    End If
+
+    ResolveRunNameOrBlank = vbNullString
+
+End Function
+
+Private Function ExtractExplicitRunName( _
+    ByVal iobLabel As String, _
+    ByVal fieldLabel As String) As String
+
+    Dim s As String
+
+    s = CleanText(iobLabel)
+
+    s = Replace(s, "I/O/B", "", 1, -1, vbTextCompare)
+    s = Replace(s, "IOB", "", 1, -1, vbTextCompare)
+    s = CleanText(s)
+
+    If Len(s) = 0 Then
+
+        s = CleanText(fieldLabel)
+
+        s = Replace(s, "Field name", "", 1, -1, vbTextCompare)
+        s = Replace(s, "Field Name", "", 1, -1, vbTextCompare)
+        s = Replace(s, "FIELD_NAME", "", 1, -1, vbTextCompare)
+        s = Replace(s, "FIELDNAME", "", 1, -1, vbTextCompare)
+        s = CleanText(s)
+
+    End If
+
+    ExtractExplicitRunName = s
+
+End Function
+
+Private Function BuildDescription( _
+    ByVal descriptionBase As String, _
+    ByVal fieldName As String, _
+    ByVal runName As String) As String
+
+    Dim result As String
+
+    result = CleanText(descriptionBase)
+
+    If Len(result) = 0 Then
+        result = CleanText(DDLookupDescription(fieldName))
+    End If
+
+    If Len(result) = 0 Then
+        result = CleanText(fieldName)
+    End If
+
+    If V1_APPEND_RUN_TO_DESCRIPTION Then
+        If Len(CleanText(runName)) > 0 Then
+            result = CleanText(result & " at " & runName)
+        End If
+    End If
+
+    BuildDescription = CleanText(result)
+
+End Function
+
+Private Sub WriteCellFieldRelationHeaders(ByVal reportWs As Worksheet)
+
+    With reportWs
+        .cells(1, 1).value = "SOURCE_TAB"
+        .cells(1, 2).value = "CELL_ADDRESS"
+        .cells(1, 3).value = "RUN"
+        .cells(1, 4).value = "FIELD_NAME_AT_RUN"
+        .cells(1, 5).value = "I/O/B"
+        .cells(1, 6).value = "DESCRIPTION"
+    End With
+
+End Sub
+
+Private Function Row2Address( _
+    ByVal ws As Worksheet, _
+    ByVal sourceColumn As Long) As String
+
+    Row2Address = ws.cells(2, sourceColumn).Address( _
+        RowAbsolute:=False, _
+        ColumnAbsolute:=False)
+
+End Function
+
+Private Function CellText(ByVal value As Variant) As String
+
+    If IsError(value) Then
+        CellText = vbNullString
+    Else
+        CellText = CleanText(CStr(value))
+    End If
+
+End Function
+
+Private Function CleanText(ByVal textValue As String) As String
+
+    Dim s As String
+
+    s = CStr(textValue)
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    s = Replace(s, vbTab, " ")
+    s = Trim$(s)
+
+    Do While InStr(1, s, "  ", vbBinaryCompare) > 0
+        s = Replace(s, "  ", " ")
+    Loop
+
+    CleanText = s
+
+End Function
+
+Private Function IsIOBLabel(ByVal labelText As String) As Boolean
+
+    Dim s As String
+
+    s = UCase$(CleanText(labelText))
+
+    IsIOBLabel = _
+        InStr(1, s, "I/O/B", vbTextCompare) > 0 Or _
+        InStr(1, s, "IOB", vbTextCompare) > 0
+
+End Function
+
+Private Function IsFieldNameLabel(ByVal labelText As String) As Boolean
+
+    Dim s As String
+
+    s = UCase$(CleanText(labelText))
+
+    IsFieldNameLabel = _
+        InStr(1, s, "FIELD NAME", vbTextCompare) > 0 Or _
+        InStr(1, s, "FIELD_NAME", vbTextCompare) > 0 Or _
+        InStr(1, s, "FIELDNAME", vbTextCompare) > 0
+
+End Function
+
+Private Function IsDescriptionLabel(ByVal labelText As String) As Boolean
+
+    Dim s As String
+
+    s = UCase$(CleanText(labelText))
+
+    IsDescriptionLabel = _
+        s = "DESCRIPTION" Or _
+        s = "FIELD DESCRIPTION" Or _
+        s = "FIELD_DESCRIPTION" Or _
+        s = "DESC" Or _
+        s = "DESCRIPTIONS" Or _
+        InStr(1, s, "DESCRIPTION", vbTextCompare) > 0
+
+End Function
+
+Private Function IsGeneratedV1ReportSheet(ByVal sheetName As String) As Boolean
+
+    Select Case UCase$(CleanText(sheetName))
+
+        Case UCase$(V1_CELL_FIELD_RELATION_SHEET), _
+             "V1_ROW2_FORMULAS", _
+             "V1_NAMED_RANGES"
+
+            IsGeneratedV1ReportSheet = True
+
+        Case Else
+
+            IsGeneratedV1ReportSheet = False
+
+    End Select
+
+End Function
+
+Private Sub DeleteWorksheetIfExists( _
+    ByVal wb As Workbook, _
+    ByVal sheetName As String)
+
+    Dim ws As Worksheet
+
+    For Each ws In wb.Worksheets
+
+        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then
+            ws.Delete
+            Exit Sub
+        End If
+
+    Next ws
+
+End Sub
+
+Private Function DDLookupDescription(ByVal fieldName As String) As String
+
+    Static dd As Object
+    Dim key As String
+
+    If dd Is Nothing Then
+        Set dd = CreateObject("Scripting.Dictionary")
+        dd.CompareMode = vbTextCompare
+        LoadEmbeddedDDDescriptions dd
+    End If
+
+    key = DDKey(fieldName)
+
+    If dd.Exists(key) Then
+        DDLookupDescription = CleanText(CStr(dd(key)))
+    Else
+        DDLookupDescription = vbNullString
+    End If
+
+End Function
+
+Private Function DDKey(ByVal fieldName As String) As String
+
+    Dim s As String
+    Dim p As Long
+
+    s = CleanText(fieldName)
+
+    If Len(s) = 0 Then
+        DDKey = vbNullString
+        Exit Function
+    End If
+
+    p = InStrRev(s, ".")
+    If p > 0 And p < Len(s) Then
+        s = Mid$(s, p + 1)
+    End If
+
+    DDKey = UCase$(CleanText(s))
+
+End Function
+
+Private Sub AddDD( _
+    ByVal dd As Object, _
+    ByVal fieldName As String, _
+    ByVal descriptionText As String)
+
+    Dim key As String
+
+    key = DDKey(fieldName)
+
+    If Len(key) > 0 Then
+        dd(key) = CleanText(descriptionText)
+    End If
+
+End Sub
+
+Private Sub LoadEmbeddedDDDescriptions(ByVal dd As Object)
+
+    '===============================================================================
+    ' BEGIN EMBEDDED DATA DICTIONARY DESCRIPTION LOOKUP ZONE
+    '
+    ' Source: DD.csv, columns FIELD_NAME and DESCRIPTION.
+    '
+    ' Purpose:
+    '   If the source worksheet has no explicit DESCRIPTION text for a column,
+    '   BuildDescription() calls DDLookupDescription(FIELD_NAME_AT_RUN).
+    '
+    ' Maintenance:
+    '   To update the embedded data dictionary, replace or add AddDD lines inside
+    '   this zone only. The rest of the macro should not need to change.
+    '
+    ' Matching behavior:
+    '   - Case-insensitive.
+    '   - Trims and collapses extra whitespace.
+    '   - Strips prefixes such as C1.CASE before lookup, so C1.CASE matches CASE.
+    '===============================================================================
+
+    AddDD dd, "BCV_REC_ID", "Unique system generated BCV record id (each record has participant information and can also have spouse, beneficiary, and alternate payee information)"
+    AddDD dd, "CASE", "Case Identification Number (include leading zeros)"
+    AddDD dd, "RETSTAT", "Participant Status at DOPT"
+    AddDD dd, "ID", "Participant Identification Number"
+    AddDD dd, "CUSNUM", "Customer Number"
+    AddDD dd, "CUSTID", "Customer Identification Number"
+    AddDD dd, "CALCULATION", "Calculation indicator or calculation control field"
+    AddDD dd, "CALC_INDICATOR", "Calculation indicator"
+    AddDD dd, "SSN", "Participant's Social Security Number"
+    AddDD dd, "FNAME", "Participant's First Name"
+    AddDD dd, "MNAME", "Participant's Middle Name"
+    AddDD dd, "LNAME", "Participant's Last Name"
+    AddDD dd, "ENAME", "Participant's Extra Name"
+    AddDD dd, "SSSN", "Spouse's Social Security Number"
+    AddDD dd, "SFNAME", "Spouse's First Name"
+    AddDD dd, "SMNAME", "Spouse's Middle Name"
+    AddDD dd, "SLNAME", "Spouse's Last Name"
+    AddDD dd, "SENAME", "Spouse's Extra Name"
+    AddDD dd, "BSSN", "Non-Spouse Beneficiary's Social Security Number"
+    AddDD dd, "BFNAME", "Non-Spouse Beneficiary's First Name"
+    AddDD dd, "BMNAME", "Non-Spouse Beneficiary's Middle Name"
+    AddDD dd, "BLNAME", "Non-Spouse Beneficiary's Last Name"
+    AddDD dd, "BENAME", "Non-Spouse Beneficiary's Extra Name"
+    AddDD dd, "NON_SPOUSE_BENF", "Non-spouse beneficiary indicator"
+    AddDD dd, "PHS", "Participant Head of Household Status"
+    AddDD dd, "PSEX", "Participant's Gender"
+    AddDD dd, "SSEX", "Spouse's Gender"
+    AddDD dd, "BSEX", "Non-Spouse Beneficiary's Gender"
+    AddDD dd, "MSTAT", "Marital Status"
+    AddDD dd, "DOB", "Participant's Date of Birth"
+    AddDD dd, "SDOB", "Spouse's Date of Birth"
+    AddDD dd, "BDOB", "Non-Spouse Beneficiary's Date of Birth"
+    AddDD dd, "VAL_SDOB", "Spouse's Date of Birth used for valuation"
+    AddDD dd, "DOH", "Participant's Date of Hire"
+    AddDD dd, "DOP", "Participant's Date of Plan Participation"
+    AddDD dd, "DOTE", "Participant's Date of Termination of Employment"
+    AddDD dd, "DOPT", "Date of Plan Termination"
+    AddDD dd, "DOD", "Participant's Date of Death"
+    AddDD dd, "SDOD", "Spouse's Date of Death"
+    AddDD dd, "BDOD", "Non-Spouse Beneficiary's Date of Death"
+    AddDD dd, "DOBF", "Date of Benefit Freeze"
+    AddDD dd, "NRD", "Normal Retirement Date"
+    AddDD dd, "NRA", "Normal Retirement Age"
+    AddDD dd, "CS", "Credited Service at DOTE"
+    AddDD dd, "CSPA", "Plan Administrator's Credited Service at DOTE"
+    AddDD dd, "PC3_CS", "Priority Category 3 Credited Service"
+    AddDD dd, "PA_AMB", "Plan Administrator's Accrued Monthly Benefit"
+    AddDD dd, "AMB", "Accrued Monthly Benefit at DOTE"
+    AddDD dd, "VS", "Years of Vesting Service at DOTE"
+    AddDD dd, "VP", "Participant's Vesting Percent at DOTE"
+    AddDD dd, "VB", "Vested Monthly Benefit in the Normal Single Form at NRA at DOTE before PBGC limitations"
+    AddDD dd, "ANB", "Participant's Age Nearest Birthday at DOPT"
+    AddDD dd, "SANB", "Spouse's Age Nearest Birthday at DOPT"
+    AddDD dd, "MAXLIM_DOPT", "Maximum Guaranteeable Benefit at DOPT"
+    AddDD dd, "PL_EURD", "Plan Earliest Unreduced Retirement Date"
+    AddDD dd, "EURD", "Earliest Unreduced Retirement Date"
+    AddDD dd, "EURA_XRA", "Earliest Unreduced Retirement Age at Expected Retirement Age"
+    AddDD dd, "RBD_DT", "Required Beginning Date"
+    AddDD dd, "PL_ERD", "Plan Earliest Retirement Date"
+    AddDD dd, "ERD", "Earliest Retirement Date"
+    AddDD dd, "ERA_XRA", "Earliest Retirement Age at Expected Retirement Age"
+    AddDD dd, "RETRO_DOR", "Retroactive Date of Retirement"
+    AddDD dd, "DOR", "Date of Retirement"
+    AddDD dd, "SBCD", "Spouse or Beneficiary Commencement Date"
+    AddDD dd, "BL", "Benefit Level"
+    AddDD dd, "XRA", "Participant's Expected Retirement Age"
+    AddDD dd, "XRD", "Expected Retirement Date"
+    AddDD dd, "SXRA", "Spouse's Expected Retirement Age"
+    AddDD dd, "FORM_CODE_NSF", "Form code for Normal Single Form"
+    AddDD dd, "FORM_CODE_NMF", "Form code for Normal Married Form"
+    AddDD dd, "SPCNSF", "Certain period or special parameter for Normal Single Form"
+    AddDD dd, "SPCNMF", "Certain period or special parameter for Normal Married Form"
+    AddDD dd, "MTHSNSF", "Months for Normal Single Form"
+    AddDD dd, "MTHSNMF", "Months for Normal Married Form"
+    AddDD dd, "FORM_CODE_ARD", "Form code at Actual Retirement Date"
+    AddDD dd, "SPC_ARD", "Certain period or special parameter at Actual Retirement Date"
+    AddDD dd, "MTHS_ARD", "Months at Actual Retirement Date"
+    AddDD dd, "FORM_CODE_DEATH", "Form code for death benefit"
+    AddDD dd, "MTHSREM_DEATH", "Months remaining for death benefit"
+    AddDD dd, "FORM_CODE_PTP_QPSA", "Form code for pre-termination protection Qualified Preretirement Survivor Annuity"
+    AddDD dd, "SPC_PTP_QPSA", "Certain period or special parameter for pre-termination protection Qualified Preretirement Survivor Annuity"
+    AddDD dd, "MTHS_PTP_QPSA", "Months for pre-termination protection Qualified Preretirement Survivor Annuity"
+    AddDD dd, "FORM_CODE_QPSA", "Form code for Qualified Preretirement Survivor Annuity"
+    AddDD dd, "MTHS_QPSA", "Months for Qualified Preretirement Survivor Annuity"
+    AddDD dd, "TEMP_QPSA", "Temporary Qualified Preretirement Survivor Annuity value"
+    AddDD dd, "QPSA_INDICATOR", "Qualified Preretirement Survivor Annuity indicator"
+    AddDD dd, "ANNUITY_TYPE", "Annuity Type Indicator"
+    AddDD dd, "FORM_CODE", "Benefit form code"
+    AddDD dd, "SPC_VAL", "Certain period or special value"
+    AddDD dd, "MTHS", "Months"
+    AddDD dd, "SAGELEV", "Spouse age for level benefit calculation"
+    AddDD dd, "EAGELEV", "Expected age for level benefit calculation"
+    AddDD dd, "ME_XRD", "Months Early at XRD"
+    AddDD dd, "ME_ERD", "Months Early at ERD"
+    AddDD dd, "ME_NRD", "Months Early at NRD"
+    AddDD dd, "ME_ARD", "Months Early at ARD"
+    AddDD dd, "ERF_XRD", "Early Retirement Factor at XRD"
+    AddDD dd, "ERF_ERD", "Early Retirement Factor at ERD"
+    AddDD dd, "ERF_ARD", "Early Retirement Factor at ARD"
+    AddDD dd, "ANB_XRD", "Participant's Age Nearest Birthday at Expected Retirement Date"
+    AddDD dd, "ANB_ERD", "Participant's Age Nearest Birthday at ERD"
+    AddDD dd, "ANB_EURD", "Participant's Age Nearest Birthday at EURD"
+    AddDD dd, "SANB_XRD", "Spouse's Age Nearest Birthday at XRD"
+    AddDD dd, "SANB_ERD", "Spouse's Age Nearest Birthday at ERD"
+    AddDD dd, "SANB_EURD", "Spouse's Age Nearest Birthday at EURD"
+    AddDD dd, "ARA", "Participant's Actual Retirement Age"
+    AddDD dd, "SARA", "Spouse's Actual Retirement Age"
+    AddDD dd, "BFCF_XRD", "Benefit Form Conversion Factor at XRD"
+    AddDD dd, "BFCF_ERD", "Benefit Form Conversion Factor at ERD"
+    AddDD dd, "BFCF_EURD", "Benefit Form Conversion Factor at EURD"
+    AddDD dd, "BFCF_NRD", "Benefit Form Conversion Factor at NRD"
+    AddDD dd, "BFCF_ARD", "Benefit Form Conversion Factor at ARD"
+    AddDD dd, "ML_XRD", "Months Late at XRD"
+    AddDD dd, "ML_ERD", "Months Late at ERD"
+    AddDD dd, "ML_EURD", "Months Late at EURD"
+    AddDD dd, "ML_ARD", "Months Late at ARD"
+    AddDD dd, "LRF_XRD", "Late Retirement Factor at XRD"
+    AddDD dd, "LRF_ERD", "Late Retirement Factor at ERD"
+    AddDD dd, "LRF_EURD", "Late Retirement Factor at EURD"
+    AddDD dd, "LRF_ARD", "Late Retirement Factor at ARD"
+    AddDD dd, "XRD_PMB", "XRD Plan Monthly Benefit at DOPT"
+    AddDD dd, "ERD_PMB", "ERD Plan Monthly Benefit"
+    AddDD dd, "EURD_PMB", "EURD Plan Monthly Benefit"
+    AddDD dd, "ARD_PMB", "Plan Monthly Benefit at ARD"
+    AddDD dd, "MAXLIM_XRD", "Maximum Guaranteeable Benefit at XRD"
+    AddDD dd, "MAXLIM_ERD", "Maximum Guaranteeable Benefit at ERD"
+    AddDD dd, "MAXLIM_EURD", "Maximum Guaranteeable Benefit at EURD"
+    AddDD dd, "MAXLIM_NRD", "Maximum Guaranteeable Benefit at NRD"
+    AddDD dd, "MAXLIM_ARD", "Maximum Guaranteeable Benefit at ARD"
+    AddDD dd, "XRD_MB_TITLE_IV", "Primary Level Life XRD Title IV monthly benefit"
+    AddDD dd, "ERD_MB_TITLE_IV_NSF", "Primary Level Life ERD Title IV Monthly Benefit in the Normal Single Form"
+    AddDD dd, "EURD_MB_TITLE_IV_NSF", "Primary Level Life EURD Title IV Monthly Benefit in the Normal Single Form"
+    AddDD dd, "NRD_MB_TITLE_IV_NSF", "Primary Level Life NRD Title IV Monthly Benefit in the Normal Single Form"
+    AddDD dd, "ARD_MB_TITLE_IV", "Title IV Monthly Benefit at ARD"
+    AddDD dd, "QPSA_PVF", "Qualified Preretirement Survivor Annuity Present Value Factor"
+    AddDD dd, "PVF_LEV_ANN", "Present Value Factor for Level Annuity"
+    AddDD dd, "PROB_DEATH", "Probability of Death"
+    AddDD dd, "PC6_LSDB_PVMB", "Priority Category 6 Lump Sum Death Benefit Present Value of Monthly Benefit"
+    AddDD dd, "PC6_LEVEL_MB", "Priority Category 6 Level Monthly Benefit"
+    AddDD dd, "PC6_4022C_AR", "Priority Category 6 4022(c) annuity rate"
+    AddDD dd, "PC6_ANNUITY_PVMB", "Priority Category 6 Annuity Present Value of Monthly Benefit"
+    AddDD dd, "PC6_QPSA_PVMB", "Priority Category 6 Qualified Preretirement Survivor Annuity Present Value of Monthly Benefit"
+    AddDD dd, "PC6_TOTAL_PV", "Priority Category 6 Total Present Value"
+    AddDD dd, "XRD_MB_4022C", "Primary Level Life XRD 4022(c) monthly benefit"
+    AddDD dd, "ERD_MB_4022C_NSF", "ERD 4022(c) Monthly Benefit in the Normal Single Form"
+    AddDD dd, "EURD_MB_4022C_NSF", "EURD 4022(c) Monthly Benefit in the Normal Single Form"
+    AddDD dd, "NRD_MB_4022C_NSF", "NRD 4022(c) Monthly Benefit in the Normal Single Form"
+    AddDD dd, "ARD_MB_4022C", "4022(c) Monthly Benefit at ARD"
+    AddDD dd, "XRD_MB_TERM", "Primary Level Life XRD Termination monthly benefit"
+    AddDD dd, "XRD_MB_QPSA_TERM", "Qualified Preretirement Survivor Annuity XRD Termination Monthly Benefit"
+    AddDD dd, "ERD_MB_TERM", "ERD Termination Monthly Benefit"
+    AddDD dd, "EURD_MB_TERM", "EURD Termination Monthly Benefit"
+    AddDD dd, "ARD_MB_TERM", "ARD Termination Monthly Benefit"
+    AddDD dd, "TERM_MB_NSF", "Termination Monthly Benefit in the Normal Single Form"
+    AddDD dd, "TERM_MB_NRD_NSF", "Primary Level Life NRD Termination Monthly Benefit in the Normal Single Form"
+    AddDD dd, "TERM_MB_ERD_NSF", "Primary Level Life ERD Termination Monthly Benefit in the Normal Single Form"
+    AddDD dd, "TERM_MB_EURD_NSF", "Primary Level Life EURD Termination Monthly Benefit in the Normal Single Form"
+    AddDD dd, "TERM_MB_ARD", "Primary Level Life ARD Termination Monthly Benefit"
+    AddDD dd, "TERM_SURV_MB_NRD", "Termination NRD Survivor Monthly Benefit"
+    AddDD dd, "TERM_SURV_MB_ERD", "Termination ERD Survivor Monthly Benefit"
+    AddDD dd, "TERM_SURV_MB_EURD", "Termination EURD Survivor Monthly Benefit"
+    AddDD dd, "TERM_SURV_MB_ARD", "Termination ARD Survivor Monthly Benefit"
+    AddDD dd, "XRD_SURV_MB_TERM", "Termination XRD Survivor Monthly Benefit"
+    AddDD dd, "BS_PARAGRAPH_1", "Benefit Statement Paragraph 1"
+    AddDD dd, "BS_PARAGRAPH_2", "Benefit Statement Paragraph 2"
+    AddDD dd, "PBGC_OPT_PV_NSF", "PBGC Optional Present Value in the Normal Single Form"
+    AddDD dd, "PBGC_OPT_SLA", "PBGC Optional Straight Life Annuity"
+    AddDD dd, "PBGC_OPT_5CC", "PBGC Optional 5-Year Certain and Continuous Annuity"
+    AddDD dd, "PBGC_OPT_10CC", "PBGC Optional 10-Year Certain and Continuous Annuity"
+    AddDD dd, "PBGC_OPT_15CC", "PBGC Optional 15-Year Certain and Continuous Annuity"
+    AddDD dd, "PBGC_OPT_PV_NMF", "PBGC Optional Present Value in the Normal Married Form"
+    AddDD dd, "PBGC_OPT_JS50", "PBGC Optional 50 Percent Joint and Survivor Annuity"
+    AddDD dd, "PBGC_OPT_JS75", "PBGC Optional 75 Percent Joint and Survivor Annuity"
+    AddDD dd, "PBGC_OPT_JS100", "PBGC Optional 100 Percent Joint and Survivor Annuity"
+    AddDD dd, "PBGC_OPT_JSPOPUP", "PBGC Optional Joint and Survivor Pop-Up Annuity"
+    AddDD dd, "LEV_MB_ARD", "Level Monthly Benefit at ARD"
+    AddDD dd, "PAY_AMT2", "Payment Amount 2"
+    AddDD dd, "TERM_MB_ARD_FF", "Termination Monthly Benefit at DOR in the Final Form of Annuity elected by the participant"
+    AddDD dd, "POPLIM", "Pop-up limit"
+    AddDD dd, "BEN_CHNG_IND", "Benefit Change Indicator"
+    AddDD dd, "REASON", "Reason"
+    AddDD dd, "PVMB_TITLE_IV", "Present Value of Monthly Benefit for Title IV"
+    AddDD dd, "PVMB_TITLE_IV_NO_Q_NO_L", "Present Value of Monthly Benefit for Title IV without QPSA and without load"
+    AddDD dd, "PVMB_TITLE_IV_QPSA", "Present Value of Monthly Benefit for Title IV QPSA"
+    AddDD dd, "PVMB_TITLE_IV_NO_LOAD", "Present Value of Monthly Benefit for Title IV without load"
+    AddDD dd, "PVPBL_ANN_RATES", "Present Value of Plan Benefit Liability using annuity rates"
+    AddDD dd, "PVPBL_ANN_RATES_NO_Q_NO_L", "Present Value of Plan Benefit Liability using annuity rates without QPSA and without load"
+    AddDD dd, "PVPBL_ANN_RATES_QPSA", "Present Value of Plan Benefit Liability using annuity rates for QPSA"
+    AddDD dd, "PVPBL_ANN_RATES_NO_LOAD", "Present Value of Plan Benefit Liability using annuity rates without load"
+    AddDD dd, "PVMB_4022C", "Present Value of Monthly Benefit for 4022(c)"
+    AddDD dd, "PVMB_4022C_NO_Q_NO_L", "Present Value of Monthly Benefit for 4022(c) without QPSA and without load"
+    AddDD dd, "PVMB_4022C_QPSA", "Present Value of Monthly Benefit for 4022(c) QPSA"
+    AddDD dd, "PVMB_4022C_NO_LOAD", "Present Value of Monthly Benefit for 4022(c) without load"
+    AddDD dd, "PVMB_TERM", "Present Value of Monthly Benefit for Termination Benefit"
+    AddDD dd, "PVMB_TERM_NO_Q_NO_L", "Present Value of Monthly Benefit for Termination Benefit without QPSA and without load"
+    AddDD dd, "PVMB_TERM_QPSA", "Present Value of Monthly Benefit for Termination Benefit QPSA"
+    AddDD dd, "PVMB_TERM_NO_LOAD", "Present Value of Monthly Benefit for Termination Benefit without load"
+    AddDD dd, "BNNFA_PVMB", "Benefits Not Funded by Net Financial Assets Present Value of Monthly Benefit"
+    AddDD dd, "BNNFA_PVMB_NO_LOAD", "Benefits Not Funded by Net Financial Assets Present Value of Monthly Benefit without load"
+    AddDD dd, "LOAD_PCT", "Load Percentage"
+    AddDD dd, "TITLE_IV_LOAD", "Title IV Benefit Expense Load"
+    AddDD dd, "PC6_LOAD_PVMB", "Priority Category 6 Load Present Value of Monthly Benefit"
+    AddDD dd, "BNNFA_LOAD", "Benefits Not Funded by Net Financial Assets Load"
+    AddDD dd, "PBL_LOAD", "Plan Benefit Liability Load"
+    AddDD dd, "LOAD_4022C", "4022(c) Load"
+    AddDD dd, "TERM_LOAD", "Termination Load"
+    AddDD dd, "BFCF_XRD_LS", "Benefit Form Conversion Factor for XRD Lump Sum"
+    AddDD dd, "BFCF_RATIO_LS", "Benefit Form Conversion Factor Ratio for Lump Sum"
+    AddDD dd, "XRD_MB_LS", "XRD Monthly Benefit used for calculating the lump sum"
+    AddDD dd, "PVF_LEV_LS", "Present Value Factor for Level Lump Sum"
+    AddDD dd, "LS_TERM", "Termination Lump Sum"
+    AddDD dd, "PVF_QPSA_LS", "Present Value Factor for QPSA Lump Sum"
+    AddDD dd, "LS_QPSA", "Qualified Preretirement Survivor Annuity Lump Sum"
+    AddDD dd, "LS_TERM_RESIDUAL", "Residual Termination Lump Sum"
+    AddDD dd, "LSOPTION", "Lump Sum Option"
+    AddDD dd, "ANNUITY_STATUS_PAY", "For payment purposes, is participant an annuity or lump sum status participant"
+    AddDD dd, "TERM_LW_ANB", "Termination Late Withdrawal Age Nearest Birthday"
+    AddDD dd, "TERM_LW_XRA", "Termination Late Withdrawal Expected Retirement Age"
+    AddDD dd, "BDERDLEV", "Beginning Date for Early Retirement Date Leveling"
+    AddDD dd, "EDERDLEV", "Ending Date for Early Retirement Date Leveling"
+    AddDD dd, "BDEUAS", "Beginning Date for Earliest Unreduced Age Service"
+    AddDD dd, "EDEUAS", "Ending Date for Earliest Unreduced Age Service"
+    AddDD dd, "RETTYP", "Retirement Type"
+    AddDD dd, "BS_IND", "Benefit Statement Indicator"
+    AddDD dd, "BR_IND", "Benefit Recalculation Indicator"
+    AddDD dd, "OFA_INDICATOR", "Optional Form of Annuity Indicator"
+    AddDD dd, "RETRO_EURD_IND", "Retroactive Earliest Unreduced Retirement Date Indicator"
+    AddDD dd, "PRSAC", "Participant received Social Security Administration correspondence"
+    AddDD dd, "SJSWC", "Spouse Joint and Survivor waiver code"
+    AddDD dd, "CE_TRACK1", "Calculation Engine Tracking Field 1"
+    AddDD dd, "CE_TRACK2", "Calculation Engine Tracking Field 2"
+    AddDD dd, "CE_TRACK3", "Calculation Engine Tracking Field 3"
+    AddDD dd, "CE_TRACK4", "Calculation Engine Tracking Field 4"
+    AddDD dd, "CE_TRACK5", "Calculation Engine Tracking Field 5"
+    AddDD dd, "CE_TRACK6", "Calculation Engine Tracking Field 6"
+
+    ' Generic / temporary fields commonly used inside V1 engines.
+    AddDD dd, "D001", "Date field 001"
+    AddDD dd, "D002", "Date field 002"
+    AddDD dd, "D003", "Date field 003"
+    AddDD dd, "D004", "Date field 004"
+    AddDD dd, "D005", "Date field 005"
+    AddDD dd, "D006", "Date field 006"
+    AddDD dd, "D012", "Date field 012"
+    AddDD dd, "N003", "Numeric field 003"
+    AddDD dd, "N004", "Numeric field 004"
+    AddDD dd, "N005", "Numeric field 005"
+    AddDD dd, "N006", "Numeric field 006"
+    AddDD dd, "N008", "Numeric field 008"
+    AddDD dd, "N009", "Numeric field 009"
+    AddDD dd, "N015", "Numeric field 015"
+    AddDD dd, "N019", "Numeric field 019"
+    AddDD dd, "N020", "Numeric field 020"
+    AddDD dd, "N021", "Numeric field 021"
+    AddDD dd, "N022", "Numeric field 022"
+    AddDD dd, "N023", "Numeric field 023"
+    AddDD dd, "N024", "Numeric field 024"
+    AddDD dd, "N025", "Numeric field 025"
+    AddDD dd, "N026", "Numeric field 026"
+    AddDD dd, "N027", "Numeric field 027"
+    AddDD dd, "N028", "Numeric field 028"
+    AddDD dd, "N029", "Numeric field 029"
+    AddDD dd, "N030", "Numeric field 030"
+    AddDD dd, "N031", "Numeric field 031"
+    AddDD dd, "N032", "Numeric field 032"
+    AddDD dd, "N034", "Numeric field 034"
+    AddDD dd, "N035", "Numeric field 035"
+    AddDD dd, "N036", "Numeric field 036"
+    AddDD dd, "N038", "Numeric field 038"
+    AddDD dd, "N039", "Numeric field 039"
+    AddDD dd, "N040", "Numeric field 040"
+    AddDD dd, "N060", "Numeric field 060"
+    AddDD dd, "N070", "Numeric field 070"
+    AddDD dd, "I001", "Integer field 001"
+    AddDD dd, "I002", "Integer field 002"
+    AddDD dd, "I003", "Integer field 003"
+    AddDD dd, "I004", "Integer field 004"
+    AddDD dd, "I005", "Integer field 005"
+    AddDD dd, "I006", "Integer field 006"
+    AddDD dd, "I007", "Integer field 007"
+    AddDD dd, "I008", "Integer field 008"
+    AddDD dd, "I009", "Integer field 009"
+    AddDD dd, "I010", "Integer field 010"
+    AddDD dd, "I011", "Integer field 011"
+    AddDD dd, "I012", "Integer field 012"
+    AddDD dd, "T016", "Text field 016"
+    AddDD dd, "T019", "Text field 019"
+    AddDD dd, "TEMP008", "Temporary field 008"
+    AddDD dd, "TEMP009", "Temporary field 009"
+    AddDD dd, "TEMP012", "Temporary field 012"
+    AddDD dd, "TEMP013", "Temporary field 013"
+    AddDD dd, "TEMP014", "Temporary field 014"
+    AddDD dd, "TEMP015", "Temporary field 015"
+    AddDD dd, "TEMP016", "Temporary field 016"
+    AddDD dd, "TEMP017", "Temporary field 017"
+    AddDD dd, "TEMP018", "Temporary field 018"
+    AddDD dd, "TEMP020", "Temporary field 020"
+    AddDD dd, "TEMP021", "Temporary field 021"
+
+    '===============================================================================
+    ' END EMBEDDED DATA DICTIONARY DESCRIPTION LOOKUP ZONE
+    '===============================================================================
+
+End Sub
+

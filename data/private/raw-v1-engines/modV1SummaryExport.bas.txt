@@ -1,0 +1,1248 @@
+Attribute VB_Name = "modV1SummaryExport"
+Option Explicit
+
+Private Const V1_CELL_FIELD_RELATION_SHEET As String = "V1_Cell_Field_Relation"
+Private Const V1_ROW2_FORMULA_REPORT_SHEET As String = "V1_Row2_Formulas"
+Private Const V1_NAMED_RANGES_REPORT_SHEET As String = "V1_Named_Ranges"
+
+Private Const V1_CELL_KEY_DELIMITER As String = "::"
+
+Public Sub RunV1EngineSummaryPipeline()
+
+    Dim wb As Workbook
+    Dim outPath As String
+
+    On Error GoTo Fail
+
+    Set wb = ActiveWorkbook
+
+    If wb Is Nothing Then
+        Err.Raise vbObjectError + 8000, , "No active workbook found."
+    End If
+
+    If Len(ThisWorkbook.Path) = 0 Then
+        Err.Raise vbObjectError + 8001, , _
+            "The workbook containing this VBA project has not been saved. Save it first so the JSON can be written into the same folder."
+    End If
+
+    Application.StatusBar = "Running V1 extraction pipeline..."
+
+    Application.Run "CreateWorkbookCellFieldRelation"
+    Application.Run "CreateV1Row2FormulaReport"
+    Application.Run "CreateV1NamedRangesReport"
+
+    outPath = ExportV1SummaryJsonOptionB(False)
+
+    MsgBox "V1 Engine Summary JSON created:" & vbCrLf & outPath, vbInformation
+
+CleanExit:
+    Application.StatusBar = False
+    Exit Sub
+
+Fail:
+    Application.StatusBar = False
+    Err.Raise Err.Number, "RunV1EngineSummaryPipeline", Err.Description
+
+End Sub
+
+Public Function ExportV1SummaryJsonOptionB( _
+    Optional ByVal promptForPath As Boolean = False) As String
+
+    Dim wb As Workbook
+    Dim wsRelation As Worksheet
+    Dim wsFormulas As Worksheet
+    Dim wsNamed As Worksheet
+
+    Dim relationData As Variant
+    Dim formulaData As Variant
+    Dim namedData As Variant
+
+    Dim relationCols As Object
+    Dim formulaCols As Object
+    Dim namedLabelCol As Long
+
+    Dim runs As Object
+    Dim sourceTabs As Object
+    Dim namedRanges As Object
+    Dim cells As Object
+    Dim formulas As Object
+    Dim dependents As Object
+    Dim formulaCellDict As Object
+
+    Dim i As Long
+    Dim jsonText As String
+    Dim outPath As String
+    Dim chosenPath As Variant
+
+    On Error GoTo Fail
+
+    Set wb = ActiveWorkbook
+
+    If wb Is Nothing Then
+        Err.Raise vbObjectError + 8100, , "No active workbook found."
+    End If
+
+    If Len(ThisWorkbook.Path) = 0 Then
+        Err.Raise vbObjectError + 8101, , _
+            "The workbook containing this VBA project has not been saved. Save it first so the JSON can be written into the same folder."
+    End If
+
+    Set wsRelation = GetWorksheetByName(wb, V1_CELL_FIELD_RELATION_SHEET)
+    Set wsFormulas = GetWorksheetByName(wb, V1_ROW2_FORMULA_REPORT_SHEET)
+    Set wsNamed = GetWorksheetByName(wb, V1_NAMED_RANGES_REPORT_SHEET)
+
+    Set relationCols = CreateObject("Scripting.Dictionary")
+    relationCols.CompareMode = vbTextCompare
+    relationCols.Add "SOURCE_TAB", HeaderColumn(wsRelation, "SOURCE_TAB")
+    relationCols.Add "CELL_ADDRESS", HeaderColumn(wsRelation, "CELL_ADDRESS")
+    relationCols.Add "RUN", HeaderColumn(wsRelation, "RUN")
+    relationCols.Add "FIELD_NAME_AT_RUN", HeaderColumn(wsRelation, "FIELD_NAME_AT_RUN")
+    relationCols.Add "I/O/B", HeaderColumn(wsRelation, "I/O/B")
+    relationCols.Add "DESCRIPTION", HeaderColumn(wsRelation, "DESCRIPTION")
+
+    Set formulaCols = CreateObject("Scripting.Dictionary")
+    formulaCols.CompareMode = vbTextCompare
+    formulaCols.Add "SOURCE_TAB", HeaderColumn(wsFormulas, "SOURCE_TAB")
+    formulaCols.Add "CELL_ADDRESS", HeaderColumn(wsFormulas, "CELL_ADDRESS")
+    formulaCols.Add "FORMULA", HeaderColumn(wsFormulas, "FORMULA")
+
+    namedLabelCol = HeaderColumnAny(wsNamed, Array("NAME_RANGE_LABEL", "NAMED_RANGE_LABEL"))
+
+    Set runs = NewTextDictionary()
+    Set sourceTabs = NewTextDictionary()
+    Set namedRanges = NewTextDictionary()
+    Set cells = NewTextDictionary()
+    Set formulas = NewTextDictionary()
+    Set dependents = NewTextDictionary()
+    Set formulaCellDict = NewTextDictionary()
+
+    relationData = UsedRangeValues(wsRelation)
+    formulaData = UsedRangeValues(wsFormulas)
+    namedData = UsedRangeValues(wsNamed)
+
+    For i = 2 To UBound(namedData, 1)
+
+        Dim namedLabel As String
+
+        namedLabel = CleanText(CStr(namedData(i, namedLabelCol)))
+
+        If Len(namedLabel) > 0 Then
+            AddUniqueKey namedRanges, namedLabel
+        End If
+
+    Next i
+
+    For i = 2 To UBound(relationData, 1)
+
+        Dim relSourceTab As String
+        Dim relCell As String
+        Dim relKey As String
+        Dim relRun As String
+        Dim relField As String
+        Dim relIOB As String
+        Dim relDescription As String
+
+        Dim relRec As Object
+        Dim runMap As Object
+        Dim runEntry As Object
+
+        relSourceTab = CleanText(CStr(relationData(i, relationCols("SOURCE_TAB"))))
+        relCell = NormalizeCellAddress(CStr(relationData(i, relationCols("CELL_ADDRESS"))))
+        relRun = CleanText(CStr(relationData(i, relationCols("RUN"))))
+        relField = CleanText(CStr(relationData(i, relationCols("FIELD_NAME_AT_RUN"))))
+        relIOB = CleanText(CStr(relationData(i, relationCols("I/O/B"))))
+        relDescription = CleanText(CStr(relationData(i, relationCols("DESCRIPTION"))))
+
+        If Len(relSourceTab) > 0 And Len(relCell) > 0 And Len(relRun) > 0 Then
+
+            AddUniqueKey sourceTabs, relSourceTab
+            AddUniqueKey runs, relRun
+
+            relKey = MakeCellKey(relSourceTab, relCell)
+
+            Set relRec = EnsureCellRecord(cells, relKey, relSourceTab, relCell)
+
+            If Len(CleanText(CStr(relRec("genericField")))) = 0 Then
+                relRec("genericField") = relField
+            End If
+
+            If Len(CleanText(CStr(relRec("description")))) = 0 Then
+                relRec("description") = relDescription
+            End If
+
+            Set runMap = relRec("runs")
+
+            Set runEntry = CreateObject("Scripting.Dictionary")
+            runEntry.CompareMode = vbTextCompare
+            runEntry.Add "field", relField
+            runEntry.Add "iob", relIOB
+
+            If runMap.Exists(relRun) Then
+                runMap.Remove relRun
+            End If
+
+            runMap.Add relRun, runEntry
+
+        End If
+
+    Next i
+
+    For i = 2 To UBound(formulaData, 1)
+
+        Dim fSourceTab As String
+        Dim fCell As String
+        Dim fKey As String
+        Dim fFormula As String
+
+        Dim refs As Variant
+        Dim localRefs As Variant
+        Dim funcs As Variant
+
+        Dim fRec As Object
+        Dim cellInfo As Object
+
+        fSourceTab = CleanText(CStr(formulaData(i, formulaCols("SOURCE_TAB"))))
+        fCell = NormalizeCellAddress(CStr(formulaData(i, formulaCols("CELL_ADDRESS"))))
+        fFormula = CleanFormulaText(CStr(formulaData(i, formulaCols("FORMULA"))))
+
+        If Len(fSourceTab) > 0 And Len(fCell) > 0 Then
+
+            AddUniqueKey sourceTabs, fSourceTab
+
+            fKey = MakeCellKey(fSourceTab, fCell)
+
+            refs = ExtractReferencesOptionB(fFormula, namedRanges, fSourceTab, localRefs)
+            funcs = ExtractFunctions(fFormula)
+
+            Set fRec = CreateObject("Scripting.Dictionary")
+            fRec.CompareMode = vbTextCompare
+
+            fRec.Add "key", fKey
+            fRec.Add "sourceTab", fSourceTab
+            fRec.Add "cell", fCell
+            fRec.Add "sheet", fSourceTab
+            fRec.Add "formula", fFormula
+            fRec.Add "refs", refs
+            fRec.Add "localRefs", localRefs
+            fRec.Add "functions", funcs
+
+            If formulas.Exists(fKey) Then
+                formulas.Remove fKey
+            End If
+
+            formulas.Add fKey, fRec
+            AddUniqueKey formulaCellDict, fKey
+
+            Set cellInfo = EnsureCellRecord(cells, fKey, fSourceTab, fCell)
+            cellInfo("hasFormula") = True
+
+            RegisterDependents dependents, fKey, refs, cells, namedRanges
+
+        End If
+
+    Next i
+
+    jsonText = BuildV1SummaryJsonOptionB( _
+        wb:=wb, _
+        sourceTabs:=sourceTabs, _
+        runs:=runs, _
+        cells:=cells, _
+        formulas:=formulas, _
+        formulaCellDict:=formulaCellDict, _
+        dependents:=dependents, _
+        namedRanges:=namedRanges)
+
+    outPath = DefaultJsonPath(wb)
+
+    If promptForPath Then
+
+        chosenPath = Application.GetSaveAsFilename( _
+            InitialFileName:=outPath, _
+            FileFilter:="JSON Files (*.json), *.json", _
+            Title:="Save V1 Engine Summary JSON")
+
+        If VarType(chosenPath) = vbBoolean Then
+            ExportV1SummaryJsonOptionB = vbNullString
+            Exit Function
+        End If
+
+        outPath = CStr(chosenPath)
+
+    End If
+
+    WriteUtf8Text outPath, jsonText
+
+    ExportV1SummaryJsonOptionB = outPath
+
+    Exit Function
+
+Fail:
+    Err.Raise Err.Number, "ExportV1SummaryJsonOptionB", Err.Description
+
+End Function
+
+Private Function BuildV1SummaryJsonOptionB( _
+    ByVal wb As Workbook, _
+    ByVal sourceTabs As Object, _
+    ByVal runs As Object, _
+    ByVal cells As Object, _
+    ByVal formulas As Object, _
+    ByVal formulaCellDict As Object, _
+    ByVal dependents As Object, _
+    ByVal namedRanges As Object) As String
+
+    Dim sb As String
+
+    sb = "{"
+    sb = sb & vbCrLf & "  ""schemaVersion"": ""v1-engine-summary-option-b-1.0"","
+    sb = sb & vbCrLf & "  ""keyMode"": ""SOURCE_TAB::CELL_ADDRESS"","
+    sb = sb & vbCrLf & "  ""workbookName"": " & JsonString(wb.Name) & ","
+    sb = sb & vbCrLf & "  ""generatedAt"": " & JsonString(Format$(Now, "yyyy-mm-dd\Thh:nn:ss")) & ","
+    sb = sb & vbCrLf & "  ""sourceTabs"": " & JsonArray(SortedDictionaryKeys(sourceTabs)) & ","
+    sb = sb & vbCrLf & "  ""runs"": " & JsonArray(SortedDictionaryKeys(runs)) & ","
+    sb = sb & vbCrLf & "  ""cells"": " & JsonCellsObject(cells) & ","
+    sb = sb & vbCrLf & "  ""formulas"": " & JsonFormulasObject(formulas) & ","
+    sb = sb & vbCrLf & "  ""formulaCells"": " & JsonArray(SortedDictionaryKeys(formulaCellDict)) & ","
+    sb = sb & vbCrLf & "  ""dependents"": " & JsonDependentsObject(dependents) & ","
+    sb = sb & vbCrLf & "  ""namedRanges"": " & JsonArray(SortedDictionaryKeys(namedRanges))
+    sb = sb & vbCrLf & "}"
+
+    BuildV1SummaryJsonOptionB = sb
+
+End Function
+
+Private Function JsonCellsObject(ByVal cells As Object) As String
+
+    Dim sb As String
+    Dim keys As Variant
+    Dim i As Long
+
+    keys = SortedDictionaryKeys(cells)
+
+    sb = "{"
+
+    If ArrayHasItems(keys) Then
+
+        For i = LBound(keys) To UBound(keys)
+
+            If i = LBound(keys) Then
+                sb = sb & vbCrLf
+            Else
+                sb = sb & "," & vbCrLf
+            End If
+
+            sb = sb & "    " & JsonString(CStr(keys(i))) & ": " & JsonCellRecord(cells(CStr(keys(i))))
+
+        Next i
+
+        sb = sb & vbCrLf & "  "
+
+    End If
+
+    sb = sb & "}"
+
+    JsonCellsObject = sb
+
+End Function
+
+Private Function JsonCellRecord(ByVal rec As Object) As String
+
+    Dim sb As String
+    Dim hasRuns As Boolean
+
+    hasRuns = rec("runs").Count > 0
+
+    sb = "{"
+    sb = sb & vbCrLf & "      ""key"": " & JsonString(CStr(rec("key"))) & ","
+    sb = sb & vbCrLf & "      ""sourceTab"": " & JsonString(CStr(rec("sourceTab"))) & ","
+    sb = sb & vbCrLf & "      ""cell"": " & JsonString(CStr(rec("cell"))) & ","
+    sb = sb & vbCrLf & "      ""genericField"": " & JsonString(CStr(rec("genericField"))) & ","
+    sb = sb & vbCrLf & "      ""description"": " & JsonString(CStr(rec("description"))) & ","
+    sb = sb & vbCrLf & "      ""hasFormula"": " & JsonBoolean(CBool(rec("hasFormula")))
+
+    If hasRuns Then
+        sb = sb & "," & vbCrLf & "      ""runs"": " & JsonRunMap(rec("runs"))
+    End If
+
+    sb = sb & vbCrLf & "    }"
+
+    JsonCellRecord = sb
+
+End Function
+
+Private Function JsonRunMap(ByVal runMap As Object) As String
+
+    Dim sb As String
+    Dim keys As Variant
+    Dim i As Long
+    Dim entry As Object
+
+    keys = SortedDictionaryKeys(runMap)
+
+    sb = "{"
+
+    If ArrayHasItems(keys) Then
+
+        For i = LBound(keys) To UBound(keys)
+
+            Set entry = runMap(CStr(keys(i)))
+
+            If i = LBound(keys) Then
+                sb = sb & vbCrLf
+            Else
+                sb = sb & "," & vbCrLf
+            End If
+
+            sb = sb & "        " & JsonString(CStr(keys(i))) & ": {"
+            sb = sb & """field"": " & JsonString(CStr(entry("field"))) & ", "
+            sb = sb & """iob"": " & JsonString(CStr(entry("iob"))) & "}"
+
+        Next i
+
+        sb = sb & vbCrLf & "      "
+
+    End If
+
+    sb = sb & "}"
+
+    JsonRunMap = sb
+
+End Function
+
+Private Function JsonFormulasObject(ByVal formulas As Object) As String
+
+    Dim sb As String
+    Dim keys As Variant
+    Dim i As Long
+
+    keys = SortedDictionaryKeys(formulas)
+
+    sb = "{"
+
+    If ArrayHasItems(keys) Then
+
+        For i = LBound(keys) To UBound(keys)
+
+            If i = LBound(keys) Then
+                sb = sb & vbCrLf
+            Else
+                sb = sb & "," & vbCrLf
+            End If
+
+            sb = sb & "    " & JsonString(CStr(keys(i))) & ": " & JsonFormulaRecord(formulas(CStr(keys(i))))
+
+        Next i
+
+        sb = sb & vbCrLf & "  "
+
+    End If
+
+    sb = sb & "}"
+
+    JsonFormulasObject = sb
+
+End Function
+
+Private Function JsonFormulaRecord(ByVal rec As Object) As String
+
+    Dim sb As String
+
+    sb = "{"
+    sb = sb & vbCrLf & "      ""key"": " & JsonString(CStr(rec("key"))) & ","
+    sb = sb & vbCrLf & "      ""sourceTab"": " & JsonString(CStr(rec("sourceTab"))) & ","
+    sb = sb & vbCrLf & "      ""cell"": " & JsonString(CStr(rec("cell"))) & ","
+    sb = sb & vbCrLf & "      ""sheet"": " & JsonString(CStr(rec("sheet"))) & ","
+    sb = sb & vbCrLf & "      ""formula"": " & JsonString(CStr(rec("formula"))) & ","
+    sb = sb & vbCrLf & "      ""refs"": " & JsonArray(rec("refs")) & ","
+    sb = sb & vbCrLf & "      ""localRefs"": " & JsonArray(rec("localRefs")) & ","
+    sb = sb & vbCrLf & "      ""functions"": " & JsonArray(rec("functions"))
+    sb = sb & vbCrLf & "    }"
+
+    JsonFormulaRecord = sb
+
+End Function
+
+Private Function JsonDependentsObject(ByVal dependents As Object) As String
+
+    Dim sb As String
+    Dim keys As Variant
+    Dim i As Long
+
+    keys = SortedDictionaryKeys(dependents)
+
+    sb = "{"
+
+    If ArrayHasItems(keys) Then
+
+        For i = LBound(keys) To UBound(keys)
+
+            If i = LBound(keys) Then
+                sb = sb & vbCrLf
+            Else
+                sb = sb & "," & vbCrLf
+            End If
+
+            sb = sb & "    " & JsonString(CStr(keys(i))) & ": " & JsonArray(SortedDictionaryKeys(dependents(CStr(keys(i)))))
+
+        Next i
+
+        sb = sb & vbCrLf & "  "
+
+    End If
+
+    sb = sb & "}"
+
+    JsonDependentsObject = sb
+
+End Function
+
+Private Sub RegisterDependents( _
+    ByVal dependents As Object, _
+    ByVal dependentKey As String, _
+    ByVal refs As Variant, _
+    ByVal cells As Object, _
+    ByVal namedRanges As Object)
+
+    Dim i As Long
+    Dim sourceId As String
+    Dim sourceTab As String
+    Dim cellAddr As String
+
+    If Not IsArray(refs) Then Exit Sub
+    If Not ArrayHasItems(refs) Then Exit Sub
+
+    For i = LBound(refs) To UBound(refs)
+
+        sourceId = CStr(refs(i))
+
+        If Len(sourceId) > 0 Then
+
+            If Not dependents.Exists(sourceId) Then
+                dependents.Add sourceId, NewTextDictionary()
+            End If
+
+            If Not dependents(sourceId).Exists(dependentKey) Then
+                dependents(sourceId).Add dependentKey, True
+            End If
+
+            If IsCellKey(sourceId) Then
+                ParseCellKey sourceId, sourceTab, cellAddr
+                EnsureCellRecord cells, sourceId, sourceTab, cellAddr
+            End If
+
+        End If
+
+    Next i
+
+End Sub
+
+Private Function ExtractReferencesOptionB( _
+    ByVal formulaText As String, _
+    ByVal namedRanges As Object, _
+    ByVal currentSourceTab As String, _
+    ByRef localRefsOut As Variant) As Variant
+
+    Dim cleanFormula As String
+    Dim refs As Object
+    Dim localRefs As Object
+    Dim rx As Object
+    Dim matches As Object
+    Dim m As Object
+    Dim k As Variant
+
+    cleanFormula = StripQuotedStrings(formulaText)
+
+    Set refs = NewTextDictionary()
+    Set localRefs = NewTextDictionary()
+
+    Set rx = CreateObject("VBScript.RegExp")
+    rx.Global = True
+    rx.IgnoreCase = True
+    rx.Pattern = "('[^']+'!|[A-Za-z_][A-Za-z0-9_\.]*!)?\$?[A-Z]{1,3}\$?\d+"
+
+    Set matches = rx.Execute(cleanFormula)
+
+    For Each m In matches
+
+        Dim rawCellToken As String
+        Dim refKey As String
+        Dim displayRef As String
+
+        rawCellToken = CStr(m.value)
+        refKey = CellRefTokenToKey(rawCellToken, currentSourceTab)
+        displayRef = CellRefTokenToDisplayRef(rawCellToken)
+
+        If Len(refKey) > 0 Then
+            AddUniqueKey refs, refKey
+        End If
+
+        If Len(displayRef) > 0 Then
+            AddUniqueKey localRefs, displayRef
+        End If
+
+    Next m
+
+    For Each k In namedRanges.keys
+
+        Dim namedLabel As String
+
+        namedLabel = CStr(k)
+
+        If ContainsWholeNamedToken(cleanFormula, namedLabel) Then
+            AddUniqueKey refs, namedLabel
+        End If
+
+    Next k
+
+    localRefsOut = SortedDictionaryKeys(localRefs)
+    ExtractReferencesOptionB = SortedDictionaryKeys(refs)
+
+End Function
+
+Private Function ExtractFunctions(ByVal formulaText As String) As Variant
+
+    Dim cleanFormula As String
+    Dim rx As Object
+    Dim matches As Object
+    Dim m As Object
+    Dim funcs As Object
+    Dim fn As String
+
+    cleanFormula = StripQuotedStrings(formulaText)
+
+    Set funcs = NewTextDictionary()
+
+    Set rx = CreateObject("VBScript.RegExp")
+    rx.Global = True
+    rx.IgnoreCase = True
+    rx.Pattern = "\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\("
+
+    Set matches = rx.Execute(cleanFormula)
+
+    For Each m In matches
+        fn = UCase$(CleanText(CStr(m.SubMatches(0))))
+        If Len(fn) > 0 Then
+            AddUniqueKey funcs, fn
+        End If
+    Next m
+
+    ExtractFunctions = SortedDictionaryKeys(funcs)
+
+End Function
+
+Private Function CellRefTokenToKey( _
+    ByVal rawToken As String, _
+    ByVal currentSourceTab As String) As String
+
+    Dim t As String
+    Dim sourceTab As String
+    Dim cellAddr As String
+    Dim bangPos As Long
+
+    t = CleanText(rawToken)
+    t = Replace$(t, "$", vbNullString)
+
+    If Len(t) = 0 Then
+        CellRefTokenToKey = vbNullString
+        Exit Function
+    End If
+
+    bangPos = InStrRev(t, "!")
+
+    If bangPos > 0 Then
+        sourceTab = UnquoteSheetName(Left$(t, bangPos - 1))
+        cellAddr = Mid$(t, bangPos + 1)
+    Else
+        sourceTab = currentSourceTab
+        cellAddr = t
+    End If
+
+    cellAddr = NormalizeCellAddress(cellAddr)
+
+    If Len(sourceTab) = 0 Or Len(cellAddr) = 0 Then
+        CellRefTokenToKey = vbNullString
+    Else
+        CellRefTokenToKey = MakeCellKey(sourceTab, cellAddr)
+    End If
+
+End Function
+
+Private Function CellRefTokenToDisplayRef(ByVal rawToken As String) As String
+
+    Dim t As String
+    Dim bangPos As Long
+    Dim sourceTab As String
+    Dim cellAddr As String
+
+    t = CleanText(rawToken)
+    t = Replace$(t, "$", vbNullString)
+
+    If Len(t) = 0 Then
+        CellRefTokenToDisplayRef = vbNullString
+        Exit Function
+    End If
+
+    bangPos = InStrRev(t, "!")
+
+    If bangPos > 0 Then
+        sourceTab = UnquoteSheetName(Left$(t, bangPos - 1))
+        cellAddr = NormalizeCellAddress(Mid$(t, bangPos + 1))
+        CellRefTokenToDisplayRef = sourceTab & "!" & cellAddr
+    Else
+        CellRefTokenToDisplayRef = NormalizeCellAddress(t)
+    End If
+
+End Function
+
+Private Function ContainsWholeNamedToken( _
+    ByVal textValue As String, _
+    ByVal token As String) As Boolean
+
+    Dim src As String
+    Dim target As String
+    Dim pos As Long
+    Dim leftOk As Boolean
+    Dim rightOk As Boolean
+    Dim nextChar As String
+
+    src = CStr(textValue)
+    target = CStr(token)
+
+    If Len(target) = 0 Then Exit Function
+
+    pos = InStr(1, src, target, vbTextCompare)
+
+    Do While pos > 0
+
+        If pos = 1 Then
+            leftOk = True
+        Else
+            leftOk = Not IsNameChar(Mid$(src, pos - 1, 1))
+        End If
+
+        If pos + Len(target) - 1 = Len(src) Then
+            rightOk = True
+        Else
+            rightOk = Not IsNameChar(Mid$(src, pos + Len(target), 1))
+        End If
+
+        If leftOk And rightOk Then
+
+            nextChar = NextNonSpaceChar(src, pos + Len(target))
+
+            If nextChar <> "(" Then
+                ContainsWholeNamedToken = True
+                Exit Function
+            End If
+
+        End If
+
+        pos = InStr(pos + 1, src, target, vbTextCompare)
+
+    Loop
+
+End Function
+
+Private Function NextNonSpaceChar( _
+    ByVal textValue As String, _
+    ByVal startPos As Long) As String
+
+    Dim i As Long
+    Dim ch As String
+
+    For i = startPos To Len(textValue)
+        ch = Mid$(textValue, i, 1)
+        If ch <> " " And ch <> vbTab Then
+            NextNonSpaceChar = ch
+            Exit Function
+        End If
+    Next i
+
+    NextNonSpaceChar = vbNullString
+
+End Function
+
+Private Function IsNameChar(ByVal ch As String) As Boolean
+
+    If Len(ch) = 0 Then
+        IsNameChar = False
+    Else
+        IsNameChar = (ch Like "[A-Za-z0-9_\.]")
+    End If
+
+End Function
+
+Private Function StripQuotedStrings(ByVal formulaText As String) As String
+
+    Dim i As Long
+    Dim ch As String
+    Dim inside As Boolean
+    Dim result As String
+
+    For i = 1 To Len(formulaText)
+
+        ch = Mid$(formulaText, i, 1)
+
+        If ch = """" Then
+            inside = Not inside
+            result = result & " "
+        ElseIf inside Then
+            result = result & " "
+        Else
+            result = result & ch
+        End If
+
+    Next i
+
+    StripQuotedStrings = result
+
+End Function
+
+Private Function EnsureCellRecord( _
+    ByVal cells As Object, _
+    ByVal cellKey As String, _
+    ByVal sourceTab As String, _
+    ByVal cellAddr As String) As Object
+
+    Dim rec As Object
+
+    If Not cells.Exists(cellKey) Then
+
+        Set rec = CreateObject("Scripting.Dictionary")
+        rec.CompareMode = vbTextCompare
+
+        rec.Add "key", cellKey
+        rec.Add "sourceTab", sourceTab
+        rec.Add "cell", cellAddr
+        rec.Add "genericField", vbNullString
+        rec.Add "description", vbNullString
+        rec.Add "hasFormula", False
+        rec.Add "runs", NewTextDictionary()
+
+        cells.Add cellKey, rec
+
+    End If
+
+    Set EnsureCellRecord = cells(cellKey)
+
+End Function
+
+Private Function MakeCellKey( _
+    ByVal sourceTab As String, _
+    ByVal cellAddr As String) As String
+
+    MakeCellKey = CleanText(sourceTab) & V1_CELL_KEY_DELIMITER & NormalizeCellAddress(cellAddr)
+
+End Function
+
+Private Function IsCellKey(ByVal valueText As String) As Boolean
+
+    IsCellKey = InStr(1, valueText, V1_CELL_KEY_DELIMITER, vbBinaryCompare) > 0
+
+End Function
+
+Private Sub ParseCellKey( _
+    ByVal cellKey As String, _
+    ByRef sourceTab As String, _
+    ByRef cellAddr As String)
+
+    Dim p As Long
+
+    p = InStr(1, cellKey, V1_CELL_KEY_DELIMITER, vbBinaryCompare)
+
+    If p > 0 Then
+        sourceTab = Left$(cellKey, p - 1)
+        cellAddr = Mid$(cellKey, p + Len(V1_CELL_KEY_DELIMITER))
+    Else
+        sourceTab = vbNullString
+        cellAddr = cellKey
+    End If
+
+End Sub
+
+Private Function NormalizeCellAddress(ByVal rawText As String) As String
+
+    Dim t As String
+    Dim bangPos As Long
+
+    t = CleanText(rawText)
+
+    If Len(t) = 0 Then
+        NormalizeCellAddress = vbNullString
+        Exit Function
+    End If
+
+    bangPos = InStrRev(t, "!")
+
+    If bangPos > 0 Then
+        t = Mid$(t, bangPos + 1)
+    End If
+
+    t = Replace$(t, "$", vbNullString)
+
+    NormalizeCellAddress = UCase$(t)
+
+End Function
+
+Private Function CleanFormulaText(ByVal formulaText As String) As String
+
+    Dim s As String
+
+    s = CleanText(CStr(formulaText))
+
+    If Left$(s, 1) = "=" Then
+        s = Mid$(s, 2)
+    End If
+
+    CleanFormulaText = CleanText(s)
+
+End Function
+
+Private Function NewTextDictionary() As Object
+
+    Set NewTextDictionary = CreateObject("Scripting.Dictionary")
+    NewTextDictionary.CompareMode = vbTextCompare
+
+End Function
+
+Private Sub AddUniqueKey( _
+    ByVal dict As Object, _
+    ByVal keyText As String)
+
+    keyText = CleanText(keyText)
+
+    If Len(keyText) = 0 Then Exit Sub
+
+    If Not dict.Exists(keyText) Then
+        dict.Add keyText, True
+    End If
+
+End Sub
+
+Private Function SortedDictionaryKeys(ByVal dict As Object) As Variant
+
+    Dim arr() As String
+    Dim i As Long
+    Dim k As Variant
+
+    If dict Is Nothing Then
+        SortedDictionaryKeys = Array()
+        Exit Function
+    End If
+
+    If dict.Count = 0 Then
+        SortedDictionaryKeys = Array()
+        Exit Function
+    End If
+
+    ReDim arr(0 To dict.Count - 1)
+
+    i = 0
+
+    For Each k In dict.keys
+        arr(i) = CStr(k)
+        i = i + 1
+    Next k
+
+    QuickSortStrings arr, LBound(arr), UBound(arr)
+
+    SortedDictionaryKeys = arr
+
+End Function
+
+Private Function ArrayHasItems(ByVal values As Variant) As Boolean
+
+    Dim lb As Long
+    Dim ub As Long
+
+    If Not IsArray(values) Then
+        ArrayHasItems = False
+        Exit Function
+    End If
+
+    On Error GoTo EmptyArray
+
+    lb = LBound(values)
+    ub = UBound(values)
+
+    ArrayHasItems = (ub >= lb)
+    Exit Function
+
+EmptyArray:
+    ArrayHasItems = False
+
+End Function
+
+Private Function JsonArray(ByVal values As Variant) As String
+
+    Dim sb As String
+    Dim i As Long
+
+    sb = "["
+
+    If ArrayHasItems(values) Then
+
+        For i = LBound(values) To UBound(values)
+
+            If i > LBound(values) Then
+                sb = sb & ", "
+            End If
+
+            sb = sb & JsonString(CStr(values(i)))
+
+        Next i
+
+    End If
+
+    sb = sb & "]"
+
+    JsonArray = sb
+
+End Function
+
+Private Function JsonString(ByVal value As String) As String
+
+    JsonString = """" & JsonEscape(value) & """"
+
+End Function
+
+Private Function JsonBoolean(ByVal value As Boolean) As String
+
+    If value Then
+        JsonBoolean = "true"
+    Else
+        JsonBoolean = "false"
+    End If
+
+End Function
+
+Private Function JsonEscape(ByVal value As String) As String
+
+    Dim t As String
+
+    t = CStr(value)
+
+    t = Replace$(t, "\", "\\")
+    t = Replace$(t, """", "\""")
+    t = Replace$(t, Chr$(8), "\b")
+    t = Replace$(t, Chr$(12), "\f")
+    t = Replace$(t, vbCrLf, "\n")
+    t = Replace$(t, vbCr, "\n")
+    t = Replace$(t, vbLf, "\n")
+    t = Replace$(t, vbTab, "\t")
+
+    JsonEscape = t
+
+End Function
+
+Private Function DefaultJsonPath(ByVal engineWorkbook As Workbook) As String
+
+    Dim folderPath As String
+    Dim fileNameWithoutExtension As String
+
+    folderPath = ThisWorkbook.Path
+
+    If Len(folderPath) = 0 Then
+        Err.Raise vbObjectError + 8300, , _
+            "Cannot determine the VBA project folder. Save the workbook containing this VBA project first."
+    End If
+
+    fileNameWithoutExtension = WorkbookBaseName(engineWorkbook.Name)
+
+    DefaultJsonPath = folderPath & Application.PathSeparator & fileNameWithoutExtension & "Summary.json"
+
+End Function
+
+Private Function WorkbookBaseName(ByVal workbookName As String) As String
+
+    Dim p As Long
+    Dim s As String
+
+    s = CleanText(workbookName)
+    p = InStrRev(s, ".")
+
+    If p > 1 Then
+        WorkbookBaseName = Left$(s, p - 1)
+    Else
+        WorkbookBaseName = s
+    End If
+
+End Function
+
+Private Sub WriteUtf8Text( _
+    ByVal filePath As String, _
+    ByVal textValue As String)
+
+    Dim stm As Object
+
+    Set stm = CreateObject("ADODB.Stream")
+
+    stm.Type = 2
+    stm.Charset = "utf-8"
+    stm.Open
+    stm.WriteText textValue
+    stm.SaveToFile filePath, 2
+    stm.Close
+
+End Sub
+
+Private Function GetWorksheetByName( _
+    ByVal wb As Workbook, _
+    ByVal sheetName As String) As Worksheet
+
+    On Error Resume Next
+    Set GetWorksheetByName = wb.Worksheets(sheetName)
+    On Error GoTo 0
+
+    If GetWorksheetByName Is Nothing Then
+        Err.Raise vbObjectError + 8200, , "Worksheet not found: " & sheetName
+    End If
+
+End Function
+
+Private Function HeaderColumn( _
+    ByVal ws As Worksheet, _
+    ByVal headerText As String) As Long
+
+    Dim lastCol As Long
+    Dim c As Long
+    Dim actualHeader As String
+
+    lastCol = ws.cells(1, ws.Columns.Count).End(xlToLeft).Column
+
+    For c = 1 To lastCol
+
+        actualHeader = CleanText(CStr(ws.cells(1, c).Value2))
+
+        If StrComp(actualHeader, headerText, vbTextCompare) = 0 Then
+            HeaderColumn = c
+            Exit Function
+        End If
+
+    Next c
+
+    Err.Raise vbObjectError + 8201, , _
+        "Required header not found on sheet '" & ws.Name & "': " & headerText
+
+End Function
+
+Private Function HeaderColumnAny( _
+    ByVal ws As Worksheet, _
+    ByVal headerTexts As Variant) As Long
+
+    Dim i As Long
+
+    For i = LBound(headerTexts) To UBound(headerTexts)
+
+        On Error Resume Next
+        HeaderColumnAny = HeaderColumn(ws, CStr(headerTexts(i)))
+
+        If Err.Number = 0 And HeaderColumnAny > 0 Then
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        Err.Clear
+        On Error GoTo 0
+
+    Next i
+
+    Err.Raise vbObjectError + 8202, , _
+        "None of the required headers were found on sheet '" & ws.Name & "'."
+
+End Function
+
+Private Function UsedRangeValues(ByVal ws As Worksheet) As Variant
+
+    Dim ur As Range
+    Dim singleData(1 To 1, 1 To 1) As Variant
+
+    Set ur = ws.UsedRange
+
+    If ur.Rows.Count = 1 And ur.Columns.Count = 1 Then
+        singleData(1, 1) = ur.Value2
+        UsedRangeValues = singleData
+    Else
+        UsedRangeValues = ur.Value2
+    End If
+
+End Function
+
+Private Function UnquoteSheetName(ByVal sheetName As String) As String
+
+    Dim s As String
+
+    s = CleanText(sheetName)
+
+    If Left$(s, 1) = "'" And Right$(s, 1) = "'" And Len(s) >= 2 Then
+        s = Mid$(s, 2, Len(s) - 2)
+        s = Replace$(s, "''", "'")
+    End If
+
+    UnquoteSheetName = CleanText(s)
+
+End Function
+
+Private Function CleanText(ByVal textValue As String) As String
+
+    Dim s As String
+
+    s = CStr(textValue)
+
+    s = Replace$(s, vbCr, " ")
+    s = Replace$(s, vbLf, " ")
+    s = Replace$(s, vbTab, " ")
+    s = Replace$(s, Chr$(160), " ")
+
+    s = Trim$(s)
+
+    Do While InStr(1, s, "  ", vbBinaryCompare) > 0
+        s = Replace$(s, "  ", " ")
+    Loop
+
+    CleanText = s
+
+End Function
+
+Private Sub QuickSortStrings( _
+    ByRef arr() As String, _
+    ByVal first As Long, _
+    ByVal last As Long)
+
+    Dim i As Long
+    Dim j As Long
+    Dim pivot As String
+    Dim temp As String
+
+    i = first
+    j = last
+    pivot = arr((first + last) \ 2)
+
+    Do While i <= j
+
+        Do While StrComp(arr(i), pivot, vbTextCompare) < 0
+            i = i + 1
+        Loop
+
+        Do While StrComp(arr(j), pivot, vbTextCompare) > 0
+            j = j - 1
+        Loop
+
+        If i <= j Then
+
+            temp = arr(i)
+            arr(i) = arr(j)
+            arr(j) = temp
+
+            i = i + 1
+            j = j - 1
+
+        End If
+
+    Loop
+
+    If first < j Then QuickSortStrings arr, first, j
+    If i < last Then QuickSortStrings arr, i, last
+
+End Sub
+

@@ -1,0 +1,337 @@
+Attribute VB_Name = "modV1NamedRangesReport"
+Option Explicit
+
+Public Const V1_NAMED_RANGES_REPORT_SHEET As String = "V1_Named_Ranges"
+
+' Include hidden user-defined names because hidden names may still appear in formulas.
+Public Const V1_INCLUDE_HIDDEN_NAMES As Boolean = True
+
+' Exclude Excel-generated names such as Print_Area, Print_Titles, _FilterDatabase.
+Public Const V1_INCLUDE_EXCEL_SYSTEM_NAMES As Boolean = False
+
+Public Sub CreateV1NamedRangesReport()
+
+    Dim wb As Workbook
+    Dim reportWs As Worksheet
+    Dim ws As Worksheet
+    Dim nm As Name
+    Dim namesDict As Object
+    Dim key As Variant
+    Dim outRow As Long
+    Dim nameLabel As String
+
+    Dim oldScreenUpdating As Boolean
+    Dim oldEnableEvents As Boolean
+    Dim oldDisplayAlerts As Boolean
+    Dim oldStatusBar As Variant
+
+    On Error GoTo Fail
+
+    Set wb = ActiveWorkbook
+
+    If wb Is Nothing Then
+        Err.Raise vbObjectError + 7000, , "No active workbook found."
+    End If
+
+    oldScreenUpdating = Application.ScreenUpdating
+    oldEnableEvents = Application.EnableEvents
+    oldDisplayAlerts = Application.DisplayAlerts
+    oldStatusBar = Application.StatusBar
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    Application.StatusBar = "Creating V1 named-ranges symbol table..."
+
+    DeleteWorksheetIfExists wb, V1_NAMED_RANGES_REPORT_SHEET
+
+    Set reportWs = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    reportWs.Name = V1_NAMED_RANGES_REPORT_SHEET
+
+    reportWs.cells(1, 1).value = "NAME_RANGE_LABEL"
+    reportWs.Columns("A:A").NumberFormat = "@"
+
+    Set namesDict = CreateObject("Scripting.Dictionary")
+    namesDict.CompareMode = vbTextCompare
+
+    ' Pass 1:
+    ' Add workbook/global names first.
+    ' If a duplicate worksheet-scoped name exists later, it will be ignored.
+    For Each nm In wb.Names
+
+        If ShouldWriteName(nm) Then
+
+            If IsWorkbookScopedName(nm) Then
+
+                nameLabel = SimpleNameFromNameObject(nm)
+
+                If Len(nameLabel) > 0 Then
+                    If Not namesDict.Exists(UCase$(nameLabel)) Then
+                        namesDict.Add UCase$(nameLabel), nameLabel
+                    End If
+                End If
+
+            End If
+
+        End If
+
+    Next nm
+
+    ' Pass 2:
+    ' Add any remaining distinct names that appear only as worksheet-scoped names.
+    ' This keeps the symbol table complete while still eliminating duplicates.
+    For Each nm In wb.Names
+
+        If ShouldWriteName(nm) Then
+
+            nameLabel = SimpleNameFromNameObject(nm)
+
+            If Len(nameLabel) > 0 Then
+                If Not namesDict.Exists(UCase$(nameLabel)) Then
+                    namesDict.Add UCase$(nameLabel), nameLabel
+                End If
+            End If
+
+        End If
+
+    Next nm
+
+    ' Pass 3:
+    ' Explicit worksheet-level scan for any local names not exposed cleanly through wb.Names.
+    For Each ws In wb.Worksheets
+
+        If Not IsGeneratedV1ReportSheet(ws.Name) Then
+
+            For Each nm In ws.Names
+
+                If ShouldWriteName(nm) Then
+
+                    nameLabel = SimpleNameFromNameObject(nm)
+
+                    If Len(nameLabel) > 0 Then
+                        If Not namesDict.Exists(UCase$(nameLabel)) Then
+                            namesDict.Add UCase$(nameLabel), nameLabel
+                        End If
+                    End If
+
+                End If
+
+            Next nm
+
+        End If
+
+    Next ws
+
+    outRow = 2
+
+    For Each key In namesDict.keys
+        reportWs.cells(outRow, 1).value = namesDict(key)
+        outRow = outRow + 1
+    Next key
+
+    With reportWs
+        .Rows(1).Font.Bold = True
+        .Columns("A:A").AutoFit
+
+        If outRow > 2 Then
+            .Range("A1:A1").AutoFilter
+        End If
+    End With
+
+CleanExit:
+    Application.StatusBar = oldStatusBar
+    Application.DisplayAlerts = oldDisplayAlerts
+    Application.EnableEvents = oldEnableEvents
+    Application.ScreenUpdating = oldScreenUpdating
+
+    Debug.Print "V1 named-ranges symbol table complete."
+    Debug.Print "Workbook: " & wb.Name
+    Debug.Print "Distinct names written: " & namesDict.Count
+    Debug.Print "Report sheet: " & V1_NAMED_RANGES_REPORT_SHEET
+
+    Exit Sub
+
+Fail:
+    Application.StatusBar = oldStatusBar
+    Application.DisplayAlerts = oldDisplayAlerts
+    Application.EnableEvents = oldEnableEvents
+    Application.ScreenUpdating = oldScreenUpdating
+
+    Err.Raise Err.Number, "CreateV1NamedRangesReport", Err.Description
+
+End Sub
+
+Private Function ShouldWriteName(ByVal nm As Name) As Boolean
+
+    Dim nameLabel As String
+
+    nameLabel = SimpleNameFromNameObject(nm)
+
+    If Len(nameLabel) = 0 Then
+        ShouldWriteName = False
+        Exit Function
+    End If
+
+    If Not V1_INCLUDE_HIDDEN_NAMES Then
+        If UCase$(SafeVisibleText(nm)) <> "TRUE" Then
+            ShouldWriteName = False
+            Exit Function
+        End If
+    End If
+
+    If Not V1_INCLUDE_EXCEL_SYSTEM_NAMES Then
+        If IsExcelSystemName(nameLabel) Then
+            ShouldWriteName = False
+            Exit Function
+        End If
+    End If
+
+    ShouldWriteName = True
+
+End Function
+
+Private Function SimpleNameFromNameObject(ByVal nm As Name) As String
+
+    SimpleNameFromNameObject = StripNameQualifier(SafeName(nm))
+
+End Function
+
+Private Function IsWorkbookScopedName(ByVal nm As Name) As Boolean
+
+    Dim rawName As String
+
+    rawName = SafeName(nm)
+
+    ' Worksheet-scoped names usually appear as:
+    '   SheetName!Name
+    '   'Sheet Name'!Name
+    '
+    ' Workbook-scoped names usually appear as:
+    '   Name
+    IsWorkbookScopedName = (InStrRev(rawName, "!") = 0)
+
+End Function
+
+Private Function SafeName(ByVal nm As Name) As String
+
+    On Error GoTo Fail
+    SafeName = CleanText(CStr(nm.Name))
+    Exit Function
+
+Fail:
+    SafeName = vbNullString
+
+End Function
+
+Private Function SafeVisibleText(ByVal nm As Name) As String
+
+    On Error GoTo Fail
+    SafeVisibleText = CStr(nm.Visible)
+    Exit Function
+
+Fail:
+    SafeVisibleText = "Unknown"
+
+End Function
+
+Private Function StripNameQualifier(ByVal rawName As String) As String
+
+    Dim bangPos As Long
+
+    rawName = CleanText(rawName)
+    bangPos = InStrRev(rawName, "!")
+
+    If bangPos > 0 And bangPos < Len(rawName) Then
+        StripNameQualifier = CleanText(Mid$(rawName, bangPos + 1))
+    Else
+        StripNameQualifier = rawName
+    End If
+
+End Function
+
+Private Function IsExcelSystemName(ByVal nameLabel As String) As Boolean
+
+    Dim s As String
+
+    s = UCase$(CleanText(nameLabel))
+
+    If s = "_FILTERDATABASE" Then
+        IsExcelSystemName = True
+        Exit Function
+    End If
+
+    If s = "PRINT_AREA" Then
+        IsExcelSystemName = True
+        Exit Function
+    End If
+
+    If s = "PRINT_TITLES" Then
+        IsExcelSystemName = True
+        Exit Function
+    End If
+
+    If Left$(s, 6) = "_XLNM." Then
+        IsExcelSystemName = True
+        Exit Function
+    End If
+
+    IsExcelSystemName = False
+
+End Function
+
+Private Function IsGeneratedV1ReportSheet(ByVal sheetName As String) As Boolean
+
+    Select Case UCase$(CleanText(sheetName))
+
+        Case UCase$(V1_NAMED_RANGES_REPORT_SHEET), _
+             "V1_ROW2_FORMULAS", _
+             "V1_CELL_FIELD_RELATION"
+
+            IsGeneratedV1ReportSheet = True
+
+        Case Else
+
+            IsGeneratedV1ReportSheet = False
+
+    End Select
+
+End Function
+
+Private Function CleanText(ByVal textValue As String) As String
+
+    Dim s As String
+
+    s = CStr(textValue)
+
+    s = Replace(s, vbCr, " ")
+    s = Replace(s, vbLf, " ")
+    s = Replace(s, vbTab, " ")
+    s = Replace(s, Chr$(160), " ")
+
+    s = Trim$(s)
+
+    Do While InStr(1, s, "  ", vbBinaryCompare) > 0
+        s = Replace(s, "  ", " ")
+    Loop
+
+    CleanText = s
+
+End Function
+
+Private Sub DeleteWorksheetIfExists( _
+    ByVal wb As Workbook, _
+    ByVal sheetName As String)
+
+    Dim ws As Worksheet
+
+    For Each ws In wb.Worksheets
+
+        If StrComp(ws.Name, sheetName, vbTextCompare) = 0 Then
+            ws.Delete
+            Exit Sub
+        End If
+
+    Next ws
+
+End Sub
+

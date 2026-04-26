@@ -133,11 +133,6 @@ body{margin:0;color:var(--text);font-family:var(--font);background:var(--body-bg
 .field-control{order:2}
 .run-control{order:3}
 .depth-control{order:4}
-.depth-pair{grid-column:1 / -1;display:grid;gap:6px}
-.depth-pair-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.depth-mini{display:grid;grid-template-columns:auto 72px;gap:8px;align-items:center;min-width:0}
-.depth-mini label{font-size:11px}
-.depth-mini .compact-select{padding:8px 10px}
 .control.wide{grid-column:auto}
 .control label{font-size:12px;color:var(--muted);letter-spacing:.03em}
 .select,.compact-select{width:100%;min-width:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:13px;padding:10px 12px;outline:none;box-shadow:var(--shadow)}
@@ -184,15 +179,11 @@ html[data-theme="light"] .tree-scroll{background:linear-gradient(180deg, var(--g
 .slider:before{content:"";position:absolute;width:20px;height:20px;left:4px;top:3px;border-radius:50%;background:linear-gradient(180deg,#ffffff,#d5e6fb);box-shadow:0 2px 8px rgba(0,0,0,.25);transition:.18s ease}
 .switch input:checked + .slider{background:color-mix(in srgb, var(--accent) 28%, transparent);border-color:color-mix(in srgb, var(--accent) 50%, var(--line))}
 .switch input:checked + .slider:before{transform:translateX(19px)}
-pre.formula-root{margin:0;padding:10px 12px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--panel-2) 56%, transparent);font-family:var(--mono);font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
-.fblock{margin:0 0 5px 0;padding:0 0 0 10px;border-left:2px solid var(--branch-color, color-mix(in srgb, var(--accent) 65%, transparent))}
+pre.formula-root{margin:0;font-family:var(--mono);font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.fblock{margin:0 0 6px 0;padding:0 0 0 11px;border-left:2px solid var(--branch-color, color-mix(in srgb, var(--accent) 65%, transparent))}
 .fline{display:block;min-height:1.55em}
 .fn{color:var(--fn);font-weight:700}.op{color:var(--op)}.cellref{color:var(--cell);font-weight:600}.fieldref{color:var(--field);font-weight:600}.num{color:var(--num)}.str{color:var(--str)}.name{color:var(--name)}.punc{color:var(--punc)}.comma{color:var(--comma)}.emptyarg{color:var(--warning);font-style:italic;font-weight:700}
-.parse-note{margin:0 0 8px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb, var(--warning) 9%, transparent);border:1px solid color-mix(in srgb, var(--warning) 32%, transparent);color:var(--muted);font-size:12px;line-height:1.45}
-.precedent-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px;color:var(--muted);font-size:12px}
-.precedent-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-.precedent-chip{display:inline-flex;align-items:center;max-width:100%;border:1px solid var(--line-soft);border-radius:999px;padding:4px 8px;background:color-mix(in srgb, var(--node-named-stroke) 8%, transparent);color:var(--text);font-family:var(--mono);font-size:11px}
-.tree-note{margin-top:9px;color:var(--muted);font-size:12px;line-height:1.45}
+.parse-note{margin:0 0 10px;padding:10px 12px;border-radius:10px;background:color-mix(in srgb, var(--warning) 12%, transparent);border:1px solid color-mix(in srgb, var(--warning) 45%, transparent);color:var(--text);font-size:13px;line-height:1.45}
 .note{color:var(--muted);font-size:12px;padding:10px 14px 14px 14px}
 .empty{color:var(--muted);font-size:13px;padding:14px}
 .node-hit{cursor:pointer}.node-hit:hover .node-box{filter:url(#glow)}
@@ -226,19 +217,15 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .drawer-title{font-size:16px;font-weight:700}
 .drawer-close{font-size:16px}
-.drawer-section{display:grid;gap:8px;padding-top:10px;margin-top:10px;border-top:1px solid var(--line-soft)}
-.drawer-section:first-of-type{border-top:0;margin-top:0;padding-top:0}
-.drawer-section-title{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.controls-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px !important;align-items:end}
+.controls-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px !important;align-items:end}
 .controls-panel .control.wide{grid-column:auto}
-.controls-panel .field-control{grid-column:1 / -1}
-.drawer-utilities{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}
+.drawer-utilities{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end;margin-top:12px}
 .controls-panel .compact-range{width:100%;justify-items:start}
 .controls-panel .compact-range input[type="range"]{width:100%}
 .controls-panel .theme-wrap{width:auto !important;justify-items:end}
-.sort-block{display:grid;gap:6px}
+.sort-block{display:grid;gap:6px;margin-top:10px}
 .sort-options{display:flex;flex-wrap:wrap;gap:8px}
-.upload-block{display:grid;gap:6px}
+.upload-block{display:grid;gap:6px;margin-top:10px}
 .upload-actions{display:flex;flex-wrap:wrap;gap:8px}
 .mini-button{appearance:none;border:1px solid var(--line);background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);border-radius:12px;padding:8px 12px;font:600 12px/1 var(--font);cursor:pointer;transition:transform .12s ease,border-color .12s ease,filter .12s ease}
 .mini-button:hover{border-color:var(--accent);filter:brightness(1.03)}
@@ -248,7 +235,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .upload-status .meta{font-size:11px;color:var(--muted)}
 .sort-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:12px;cursor:pointer;user-select:none}
 .sort-chip input{accent-color:var(--accent)}
-.drawer-notes{padding:0;border:0;background:transparent}
+.drawer-notes{margin-top:10px;padding:12px;border:1px solid var(--line-soft);border-radius:14px;background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent)}
 .drawer-notes .note-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;text-transform:uppercase}
 .drawer-notes .note-list{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.5}
 .workspace{grid-template-columns:minmax(0,1.78fr) minmax(320px,.88fr);gap:8px}
@@ -276,18 +263,16 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <div class="drawer-title">Explorer controls</div>
         <button id="drawer-close" class="icon-button drawer-close" type="button" aria-label="Close controls" title="Close controls">&times;</button>
       </div>
-      <div class="drawer-section">
-        <div class="drawer-section-title">Selection</div>
-        <div class="controls-grid">
-          <div class="control source-control">
-            <label for="source-tab-select">1. Source tab</label>
-            <select id="source-tab-select" class="compact-select">
+      <div class="controls-grid">
+        <div class="control source-control">
+          <label for="source-tab-select">1. Source tab</label>
+          <select id="source-tab-select" class="compact-select">
         <option value="">All tabs</option>
       </select>
-          </div>
-          <div class="control wide field-control">
-            <label for="root-select">2. Cell / field</label>
-            <select id="root-select" class="select">
+        </div>
+        <div class="control wide field-control">
+          <label for="root-select">2. Cell / field</label>
+          <select id="root-select" class="select">
 <option value="AA20">AA20  ·  AA20</option>
 <option value="AP2">AMB  ·  AP2</option>
 <option value="BD2">ANB  ·  BD2</option>
@@ -530,16 +515,9 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 </select>
           <div id="run-scope-status" class="scope-status" aria-live="polite"></div>
         </div>
-        </div>
-      </div>
-      <div class="drawer-section">
-        <div class="drawer-section-title">Graph</div>
-        <div class="control depth-control depth-pair">
-          <label>Graph depth</label>
-          <div class="depth-pair-row">
-            <div class="depth-mini">
-              <label for="backward-depth-select">Back</label>
-              <select id="backward-depth-select" class="compact-select">
+        <div class="control depth-control">
+          <label for="backward-depth-select">Backward depth</label>
+          <select id="backward-depth-select" class="compact-select">
         <option value="0">0</option>
         <option value="1">1</option>
         <option value="2" selected>2</option>
@@ -547,18 +525,17 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <option value="4">4</option>
         <option value="5">5</option>
       </select>
-            </div>
-            <div class="depth-mini">
-              <label for="forward-depth-select">Forward</label>
-              <select id="forward-depth-select" class="compact-select">
+        </div>
+        <div class="control depth-control">
+          <label for="forward-depth-select">Forward depth</label>
+          <select id="forward-depth-select" class="compact-select">
         <option value="0">0</option>
         <option value="1">1</option>
         <option value="2" selected>2</option>
         <option value="3">3</option>
       </select>
-            </div>
-          </div>
         </div>
+      </div>
       <div class="drawer-utilities">
         <div class="control compact-range">
           <label for="spacing-range">Node spacing</label>
@@ -577,9 +554,6 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <label class="sort-chip"><input type="radio" name="sort-mode" value="cell"> Cell refs</label>
         </div>
       </div>
-      </div>
-      <div class="drawer-section">
-        <div class="drawer-section-title">Data</div>
       <div class="upload-block">
         <label>Load V1Summary.json</label>
         <div class="upload-actions">
@@ -591,16 +565,12 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <div id="upload-status-meta" class="meta">Client-side only · no server calls</div>
         </div>
       </div>
-      </div>
-      <div class="drawer-section">
-        <div class="drawer-section-title">Reference</div>
       <div class="drawer-notes">
         <div class="note-title">Notes</div>
         <ul class="note-list">
           <li>Local graph shows both feeders and dependents around the selected node.</li>
           <li>Auto-fit is the default. Drag blank space to pan, use the wheel to zoom, and double-click the panel to re-fit.</li>
         </ul>
-      </div>
       </div>
     </section>
 
@@ -1206,6 +1176,17 @@ function optionLabelFor(cell){
   if (sourceTab) parts.push(`Tab: ${sourceTab}`);
   parts.push(localCell);
   return parts.join('  ·  ');
+}
+
+function selectRootCell(cell){
+  if (!cell || !DATA.cells[cell]) return;
+  appState.rootCell = cell;
+  const cellRuns = explicitRunsForCell(appState.rootCell);
+  if (cellRuns.length && !cellRuns.includes(appState.run)) appState.run = cellRuns[0];
+  appState.inspectCell = appState.rootCell || null;
+  rebuildSelectors();
+  renderGraph();
+  renderTree();
 }
 
 function orderedRunsFromSet(runSet){
@@ -2245,25 +2226,16 @@ function renderTree(){
   const precedentRefs = refsFor(cell);
   if (precedentRefs.length) {
     const refsLine = document.createElement('div');
-    refsLine.className = 'precedent-strip';
-
-    const refsLabel = document.createElement('span');
-    refsLabel.className = 'precedent-label';
-    refsLabel.textContent = 'Precedents';
-    refsLine.appendChild(refsLabel);
-
-    for (const ref of precedentRefs) {
-      const chip = document.createElement('span');
-      chip.className = 'precedent-chip';
-      chip.textContent = preferredLabelForNode(ref);
-      refsLine.appendChild(chip);
-    }
+    refsLine.className = 'subtle';
+    refsLine.style.marginTop = '10px';
+    refsLine.textContent = `Precedents: ${precedentRefs.map(preferredLabelForNode).join(', ')}`;
     treeStage.appendChild(refsLine);
   }
 
   if (ast.__emptyArgCount > 0) {
     const legend = document.createElement('div');
-    legend.className = 'tree-note';
+    legend.className = 'subtle';
+    legend.style.marginTop = '10px';
     legend.textContent = '<empty> marks an empty placeholder argument preserved from the source formula.';
     treeStage.appendChild(legend);
   }
@@ -2299,13 +2271,7 @@ function refreshAll(){
 }
 
 rootSelect.addEventListener('change', () => {
-  appState.rootCell = rootSelect.value;
-  const cellRuns = explicitRunsForCell(appState.rootCell);
-  if (cellRuns.length && !cellRuns.includes(appState.run)) appState.run = cellRuns[0];
-  appState.inspectCell = appState.rootCell || null;
-  rebuildSelectors();
-  renderGraph();
-  renderTree();
+  selectRootCell(rootSelect.value);
 });
 
 runSelect.addEventListener('change', () => {

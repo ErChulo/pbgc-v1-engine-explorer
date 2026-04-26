@@ -462,6 +462,14 @@ test('sample 4 AEQ_INTEREST renders Plan_Int named range precedent', { timeout: 
   const result = { ok: false, checks: {} };
   function selectedText(id){ const el = document.getElementById(id); return el?.selectedOptions?.[0]?.textContent?.trim() || ''; }
   function graphNodes(){ return Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(n => n.dataset.cell); }
+  async function waitFor(predicate, timeoutMs = 4000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
   try {
     const input = document.getElementById('load-json-input');
     const file = new File([JSON.stringify(${JSON.stringify(sample4)})], 'sample-4-v1Summary.json', { type: 'application/json' });
@@ -469,7 +477,10 @@ test('sample 4 AEQ_INTEREST renders Plan_Int named range precedent', { timeout: 
     dt.items.add(file);
     input.files = dt.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 900));
+    await waitFor(() =>
+      document.getElementById('upload-status-name').textContent.trim() === 'sample-4-v1Summary.json' &&
+      Array.from(document.getElementById('source-tab-select').options).some(o => o.value === 'Separated')
+    );
 
     const source = document.getElementById('source-tab-select');
     source.value = 'Separated';
@@ -477,8 +488,15 @@ test('sample 4 AEQ_INTEREST renders Plan_Int named range precedent', { timeout: 
     await new Promise(resolve => setTimeout(resolve, 200));
 
     const root = document.getElementById('root-select');
-    const option = Array.from(root.options).find(o => /^AEQ_INTEREST\\s/.test(o.textContent) && /Tab: Separated/.test(o.textContent));
-    if (!option) throw new Error('AEQ_INTEREST option was not found');
+    const option = Array.from(root.options).find(o => o.textContent.startsWith('AEQ_INTEREST ') && /Tab: Separated/.test(o.textContent));
+    if (!option) {
+      const sampleOptions = Array.from(root.options)
+        .filter(o => /AEQ|INTEREST|IE2|Separated/.test(o.textContent) || /IE2/.test(o.value))
+        .slice(0, 12)
+        .map(o => o.value + '=' + o.textContent)
+        .join(' | ');
+      throw new Error('AEQ_INTEREST option was not found. Options: ' + sampleOptions);
+    }
     root.value = option.value;
     root.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(resolve => setTimeout(resolve, 200));
