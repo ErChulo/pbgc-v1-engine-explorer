@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+dist/
+.vite/
+
+# Local app data
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated outputs
+output/reports/*
+output/exports/*
+output/logs/*
+output/reports/.gitkeep
+output/exports/.gitkeep
+output/logs/.gitkeep
+
+# Private or plan-specific data
+data/private/*
+data/private/.gitkeep
+
+# Excel temporary files
+~$*
+*.tmp
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,44 @@
+Folder and file structure for:
+C:\Users\heric\OneDrive\Documents\ACTUARIAL_TECHNICAL_MANUAL\DELIVERABLES\pbgc-v1-engine-explorer
+
+Folder PATH listing
+Volume serial number is 022F-725F
+C:\USERS\HERIC\ONEDRIVE\DOCUMENTS\ACTUARIAL_TECHNICAL_MANUAL\DELIVERABLES\PBGC-V1-ENGINE-EXPLORER
+|   DD-no-UDFs-subsets-indicators.csv
+|   folder_structure.txt
+|   folder_tree.bat
+|   modV1SummaryExport.txt
+|   v1-engine-formula-explorer-v2.6.8.5.html
+|   v1-engine-formula-explorer-v2.7.0.html
+|   v1-summary.xlsm
+|   V1Summary.json
+|   
+\---v1-preparation-scripts
+        VBA - Function Arguments.txt
+        VBA - Function BasicFormulaTree.txt
+        VBA - Function CellReflist.txt
+        VBA - Function ExtractCellRefs.txt
+        VBA - Function GetNameRefersTo.txt
+        VBA - Function HasSubstring.txt
+        VBA - Sub CalcularMatrizDistanciasPonderadas.txt
+        VBA - Sub CellInformationFlow.txt
+        VBA - Sub Find_Links.txt
+        VBA - Sub GetAllNamedRanges.txt
+        VBA - Sub Grafo_prueba.txt
+        VBA - Sub ListAllDependents.txt
+        VBA - Sub ListAllFormulas.txt
+        VBA - Sub ListAllPrecedents.txt
+        VBA - Sub ListDirectDependents.txt
+        VBA - Sub ListDirectPrecedents.txt
+        VBA - Sub ListFormulas.txt
+        VBA - Sub LlenarPrecedentesVacios.txt
+        VBA - Sub MakeListOfNamedRanges.txt
+        VBA - Sub ReadFormulas.txt
+        VBA - Sub RemoveCarriageReturns.txt
+        VBA - Sub RemoveIndentation.txt
+        VBA - Sub Replace_Blank_With_Text.txt
+        VBA - Sub Reporte_Formulas_V1 (en progreso).txt
+        VBA - Sub ReversePivotTable.txt
+        VBA - Sub StackColumns.txt
+        VBA - Sub Summary_All_Worksheets_With_Formulas.txt
+        

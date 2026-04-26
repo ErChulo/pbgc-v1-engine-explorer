@@ -1,0 +1,1 @@
+// Dexie / IndexedDB adapter
