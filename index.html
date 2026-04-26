@@ -133,6 +133,11 @@ body{margin:0;color:var(--text);font-family:var(--font);background:var(--body-bg
 .field-control{order:2}
 .run-control{order:3}
 .depth-control{order:4}
+.depth-pair{grid-column:1 / -1;display:grid;gap:6px}
+.depth-pair-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.depth-mini{display:grid;grid-template-columns:auto 72px;gap:8px;align-items:center;min-width:0}
+.depth-mini label{font-size:11px}
+.depth-mini .compact-select{padding:8px 10px}
 .control.wide{grid-column:auto}
 .control label{font-size:12px;color:var(--muted);letter-spacing:.03em}
 .select,.compact-select{width:100%;min-width:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:13px;padding:10px 12px;outline:none;box-shadow:var(--shadow)}
@@ -217,15 +222,19 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .drawer-title{font-size:16px;font-weight:700}
 .drawer-close{font-size:16px}
-.controls-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px !important;align-items:end}
+.drawer-section{display:grid;gap:8px;padding-top:10px;margin-top:10px;border-top:1px solid var(--line-soft)}
+.drawer-section:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.drawer-section-title{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.controls-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px !important;align-items:end}
 .controls-panel .control.wide{grid-column:auto}
-.drawer-utilities{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end;margin-top:12px}
+.controls-panel .field-control{grid-column:1 / -1}
+.drawer-utilities{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}
 .controls-panel .compact-range{width:100%;justify-items:start}
 .controls-panel .compact-range input[type="range"]{width:100%}
 .controls-panel .theme-wrap{width:auto !important;justify-items:end}
-.sort-block{display:grid;gap:6px;margin-top:10px}
+.sort-block{display:grid;gap:6px}
 .sort-options{display:flex;flex-wrap:wrap;gap:8px}
-.upload-block{display:grid;gap:6px;margin-top:10px}
+.upload-block{display:grid;gap:6px}
 .upload-actions{display:flex;flex-wrap:wrap;gap:8px}
 .mini-button{appearance:none;border:1px solid var(--line);background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);border-radius:12px;padding:8px 12px;font:600 12px/1 var(--font);cursor:pointer;transition:transform .12s ease,border-color .12s ease,filter .12s ease}
 .mini-button:hover{border-color:var(--accent);filter:brightness(1.03)}
@@ -235,7 +244,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .upload-status .meta{font-size:11px;color:var(--muted)}
 .sort-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:12px;cursor:pointer;user-select:none}
 .sort-chip input{accent-color:var(--accent)}
-.drawer-notes{margin-top:10px;padding:12px;border:1px solid var(--line-soft);border-radius:14px;background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent)}
+.drawer-notes{padding:0;border:0;background:transparent}
 .drawer-notes .note-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;text-transform:uppercase}
 .drawer-notes .note-list{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.5}
 .workspace{grid-template-columns:minmax(0,1.78fr) minmax(320px,.88fr);gap:8px}
@@ -263,16 +272,18 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <div class="drawer-title">Explorer controls</div>
         <button id="drawer-close" class="icon-button drawer-close" type="button" aria-label="Close controls" title="Close controls">&times;</button>
       </div>
-      <div class="controls-grid">
-        <div class="control source-control">
-          <label for="source-tab-select">1. Source tab</label>
-          <select id="source-tab-select" class="compact-select">
+      <div class="drawer-section">
+        <div class="drawer-section-title">Selection</div>
+        <div class="controls-grid">
+          <div class="control source-control">
+            <label for="source-tab-select">1. Source tab</label>
+            <select id="source-tab-select" class="compact-select">
         <option value="">All tabs</option>
       </select>
-        </div>
-        <div class="control wide field-control">
-          <label for="root-select">2. Cell / field</label>
-          <select id="root-select" class="select">
+          </div>
+          <div class="control wide field-control">
+            <label for="root-select">2. Cell / field</label>
+            <select id="root-select" class="select">
 <option value="AA20">AA20  ·  AA20</option>
 <option value="AP2">AMB  ·  AP2</option>
 <option value="BD2">ANB  ·  BD2</option>
@@ -515,9 +526,16 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 </select>
           <div id="run-scope-status" class="scope-status" aria-live="polite"></div>
         </div>
-        <div class="control depth-control">
-          <label for="backward-depth-select">Backward depth</label>
-          <select id="backward-depth-select" class="compact-select">
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-title">Graph</div>
+        <div class="control depth-control depth-pair">
+          <label>Graph depth</label>
+          <div class="depth-pair-row">
+            <div class="depth-mini">
+              <label for="backward-depth-select">Back</label>
+              <select id="backward-depth-select" class="compact-select">
         <option value="0">0</option>
         <option value="1">1</option>
         <option value="2" selected>2</option>
@@ -525,17 +543,18 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <option value="4">4</option>
         <option value="5">5</option>
       </select>
-        </div>
-        <div class="control depth-control">
-          <label for="forward-depth-select">Forward depth</label>
-          <select id="forward-depth-select" class="compact-select">
+            </div>
+            <div class="depth-mini">
+              <label for="forward-depth-select">Forward</label>
+              <select id="forward-depth-select" class="compact-select">
         <option value="0">0</option>
         <option value="1">1</option>
         <option value="2" selected>2</option>
         <option value="3">3</option>
       </select>
+            </div>
+          </div>
         </div>
-      </div>
       <div class="drawer-utilities">
         <div class="control compact-range">
           <label for="spacing-range">Node spacing</label>
@@ -554,6 +573,9 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <label class="sort-chip"><input type="radio" name="sort-mode" value="cell"> Cell refs</label>
         </div>
       </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-title">Data</div>
       <div class="upload-block">
         <label>Load V1Summary.json</label>
         <div class="upload-actions">
@@ -565,12 +587,16 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <div id="upload-status-meta" class="meta">Client-side only · no server calls</div>
         </div>
       </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-title">Reference</div>
       <div class="drawer-notes">
         <div class="note-title">Notes</div>
         <ul class="note-list">
           <li>Local graph shows both feeders and dependents around the selected node.</li>
           <li>Auto-fit is the default. Drag blank space to pan, use the wheel to zoom, and double-click the panel to re-fit.</li>
         </ul>
+      </div>
       </div>
     </section>
 

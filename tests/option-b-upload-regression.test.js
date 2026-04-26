@@ -477,7 +477,7 @@ test('sample 4 AEQ_INTEREST renders Plan_Int named range precedent', { timeout: 
     await new Promise(resolve => setTimeout(resolve, 200));
 
     const root = document.getElementById('root-select');
-    const option = Array.from(root.options).find(o => /^AEQ_INTEREST\\s/.test(o.textContent));
+    const option = Array.from(root.options).find(o => /^AEQ_INTEREST\\s/.test(o.textContent) && /Tab: Separated/.test(o.textContent));
     if (!option) throw new Error('AEQ_INTEREST option was not found');
     root.value = option.value;
     root.dispatchEvent(new Event('change', { bubbles: true }));
