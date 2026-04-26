@@ -41,6 +41,8 @@
   --node-output-stroke:#4fd1ff;
   --node-named-fill:#171103;
   --node-named-stroke:#ffd84d;
+  --node-selected-stroke:#c084fc;
+  --node-inspect-stroke:#f8dc7f;
   --node-field-text:#eaf4ff;
   --node-cell-text:#9cb3cc;
   --grid-v:rgba(79,209,255,.05);
@@ -84,19 +86,21 @@ html[data-theme="light"]{
   --punc:#556b82;
   --comma:#61758a;
   --node-fill-1:#ffffff;
-  --node-fill-2:#f2f6fb;
-  --node-formula-1:#f8fbff;
-  --node-formula-2:#eaf1f8;
-  --node-input-fill:#f2fffb;
-  --node-input-stroke:#008a70;
-  --node-output-stroke:#0058d1;
-  --node-named-fill:#fff6df;
-  --node-named-stroke:#b97500;
-  --node-field-text:#10263d;
-  --node-cell-text:#4c657d;
-  --grid-v:rgba(11,20,32,.10);
-  --grid-h:rgba(11,20,32,.10);
-  --graph-overlay:linear-gradient(180deg, rgba(15,95,224,.04), rgba(15,95,224,0));
+  --node-fill-2:#f3f6fa;
+  --node-formula-1:#eff6ff;
+  --node-formula-2:#dbeafe;
+  --node-input-fill:#ecfdf5;
+  --node-input-stroke:#047857;
+  --node-output-stroke:#1d4ed8;
+  --node-named-fill:#fffbeb;
+  --node-named-stroke:#b45309;
+  --node-selected-stroke:#7c3aed;
+  --node-inspect-stroke:#ca8a04;
+  --node-field-text:#0f172a;
+  --node-cell-text:#475569;
+  --grid-v:rgba(15,23,42,.14);
+  --grid-h:rgba(15,23,42,.14);
+  --graph-overlay:linear-gradient(180deg, rgba(29,78,216,.035), rgba(29,78,216,0));
   --body-bg:
     radial-gradient(circle at 10% 0%, rgba(15,95,224,.08), transparent 24%),
     radial-gradient(circle at 90% 100%, rgba(0,92,153,.07), transparent 28%),
@@ -109,7 +113,7 @@ html[data-theme="light"]{
   --icon-bg:linear-gradient(180deg,#ffffff,#eaf1f8);
   --icon-fg:#114fae;
   --logo-bg:linear-gradient(180deg,#ffffff,#eef3f8);
-  --graph-bg:#dfe8f2;
+  --graph-bg:#f8fafc;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -125,10 +129,16 @@ body{margin:0;color:var(--text);font-family:var(--font);background:var(--body-bg
 .brand-title h2{margin:0;font-size:22px;line-height:1.02;letter-spacing:.01em}
 .brand-sub{font-size:11px;color:var(--muted);line-height:1.2}
 .control{display:grid;gap:4px;min-width:0}
+.source-control{order:1}
+.field-control{order:2}
+.run-control{order:3}
+.depth-control{order:4}
 .control.wide{grid-column:auto}
 .control label{font-size:12px;color:var(--muted);letter-spacing:.03em}
 .select,.compact-select{width:100%;min-width:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:13px;padding:10px 12px;outline:none;box-shadow:var(--shadow)}
 .compact-select{padding:10px 12px}
+.scope-status{min-height:16px;font-size:11px;line-height:1.35;color:var(--muted)}
+.compact-select:disabled{opacity:.62;cursor:not-allowed}
 select, option, optgroup{color:var(--option-text);background:var(--option-bg)}
 select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow)}
 input[type="range"]{width:120px;accent-color:var(--accent)}
@@ -181,11 +191,13 @@ pre.formula-root{margin:0;font-family:var(--mono);font-size:13px;line-height:1.5
 .node-box.formula,.node-box.output{fill:url(#nodeFillFormula);stroke:var(--node-output-stroke)}
 .node-box.input{fill:var(--node-input-fill);stroke:var(--node-input-stroke)}
 .node-box.named{fill:var(--node-named-fill);stroke:var(--node-named-stroke)}
-.node-box.root{stroke:#ffffff;stroke-width:2.6}.node-box.inspect{stroke:#fffbad;stroke-width:2.4}
+.node-box.inspect{stroke:var(--node-inspect-stroke);stroke-width:2.4}
+.node-box.root{stroke:var(--node-selected-stroke);stroke-width:3}
 .node-field{font-size:14px;font-weight:700;fill:var(--node-field-text)}
 .node-tab,.node-cell{font-size:11px;fill:var(--node-cell-text)}
-.edge{fill:none;stroke:#8ebbe0;stroke-width:1.15;opacity:.82;vector-effect:non-scaling-stroke}.edge.to-formula,.edge.to-output{stroke:#4fd1ff}.edge.to-input{stroke:#19ffb7;opacity:.78}.edge.to-named{stroke:#ffd84d;opacity:.82}
+.edge{fill:none;stroke:var(--muted);stroke-width:1.15;opacity:.82;vector-effect:non-scaling-stroke}.edge.to-formula,.edge.to-output{stroke:var(--node-output-stroke)}.edge.to-input{stroke:var(--node-input-stroke);opacity:.78}.edge.to-named{stroke:var(--node-named-stroke);opacity:.82}
 .legend-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.legend-ring{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--node-selected-stroke);margin-right:6px;vertical-align:-1px}
 @media (max-width: 1180px){.topbar{grid-template-columns:1fr}.utility-panel{grid-template-columns:auto 1fr;grid-template-areas:"logo title" "range mode";align-items:center}.brand-mark{grid-area:logo}.brand-title{grid-area:title}.compact-range{grid-area:range;justify-items:start}.theme-wrap{grid-area:mode;justify-self:end}.controls-grid{grid-template-columns:1fr repeat(3,minmax(92px,110px))}.workspace{grid-template-columns:1fr;grid-template-rows:minmax(360px,1.05fr) minmax(280px,.95fr)}}
 @media (max-width: 760px){.controls-grid{grid-template-columns:1fr}.control.wide{grid-column:auto}.compact-range{width:100%}}
 
@@ -249,11 +261,17 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
     <section class="top-panel controls-panel" id="drawer-panel" aria-label="Explorer controls">
       <div class="drawer-head">
         <div class="drawer-title">Explorer controls</div>
-        <button id="drawer-close" class="icon-button drawer-close" type="button" aria-label="Close controls" title="Close controls">✕</button>
+        <button id="drawer-close" class="icon-button drawer-close" type="button" aria-label="Close controls" title="Close controls">&times;</button>
       </div>
       <div class="controls-grid">
-        <div class="control wide">
-          <label for="root-select">Cell / field</label>
+        <div class="control source-control">
+          <label for="source-tab-select">1. Source tab</label>
+          <select id="source-tab-select" class="compact-select">
+        <option value="">All tabs</option>
+      </select>
+        </div>
+        <div class="control wide field-control">
+          <label for="root-select">2. Cell / field</label>
           <select id="root-select" class="select">
 <option value="AA20">AA20  ·  AA20</option>
 <option value="AP2">AMB  ·  AP2</option>
@@ -485,8 +503,8 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 <option value="EN2">XRD_SURV_MB_TERM  ·  EN2</option>
 </select>
         </div>
-        <div class="control">
-          <label for="run-select">Run</label>
+        <div class="control run-control">
+          <label for="run-select">3. Available runs</label>
           <select id="run-select" class="compact-select">
 <option value="XRD" selected>XRD</option>
 <option value="NRD">NRD</option>
@@ -495,14 +513,9 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 <option value="DORNSF">DORNSF</option>
 <option value="DOR">DOR</option>
 </select>
+          <div id="run-scope-status" class="scope-status" aria-live="polite"></div>
         </div>
-        <div class="control">
-          <label for="source-tab-select">Source tab</label>
-          <select id="source-tab-select" class="compact-select">
-        <option value="">All tabs</option>
-      </select>
-        </div>
-        <div class="control">
+        <div class="control depth-control">
           <label for="backward-depth-select">Backward depth</label>
           <select id="backward-depth-select" class="compact-select">
         <option value="0">0</option>
@@ -513,7 +526,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <option value="5">5</option>
       </select>
         </div>
-        <div class="control">
+        <div class="control depth-control">
           <label for="forward-depth-select">Forward depth</label>
           <select id="forward-depth-select" class="compact-select">
         <option value="0">0</option>
@@ -594,9 +607,10 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           
         </div>
         <div class="subtle">
-          <span class="legend-dot" style="background:#4fd1ff"></span>output
-          &nbsp;&nbsp;<span class="legend-dot" style="background:#19ffb7"></span>input
-          &nbsp;&nbsp;<span class="legend-dot" style="background:#ffd84d"></span>named range
+          <span class="legend-dot" style="background:var(--node-output-stroke)"></span>output
+          &nbsp;&nbsp;<span class="legend-dot" style="background:var(--node-input-stroke)"></span>input
+          &nbsp;&nbsp;<span class="legend-dot" style="background:var(--node-named-stroke)"></span>named range
+          &nbsp;&nbsp;<span class="legend-ring"></span>selected cell
         </div>
       </div>
       <div class="graph-stage" id="graph-stage">
@@ -968,6 +982,7 @@ const PALETTE = [202, 156, 286, 42, 336, 118, 18, 224, 188, 258, 352, 82];
 
 const rootSelect = document.getElementById('root-select');
 const runSelect = document.getElementById('run-select');
+const runScopeStatus = document.getElementById('run-scope-status');
 const sourceTabSelect = document.getElementById('source-tab-select');
 const backwardDepthSelect = document.getElementById('backward-depth-select');
 const forwardDepthSelect = document.getElementById('forward-depth-select');
@@ -1019,8 +1034,8 @@ function applyLoadedSummary(rawSummary, sourceName){
   DATA = normalizeSummary(rawSummary);
   appState.run = DATA.runs.includes('XRD') ? 'XRD' : (DATA.runs[0] || '');
   appState.sourceTab = DATA.sourceTabs?.[0] || '';
-  appState.rootCell = DATA.formulaCells[0] || Object.keys(DATA.cells)[0] || null;
-  appState.inspectCell = appState.rootCell || null;
+  appState.rootCell = null;
+  appState.inspectCell = null;
   updateUploadStatus(datasetDisplayName(DATA, sourceName), datasetDisplayMeta(DATA));
   refreshAll();
 }
@@ -1070,11 +1085,36 @@ function displayNodeAddress(nodeId){
 
 function cellMatchesSelectedSourceTab(cellId){
   if (!appState.sourceTab) return true;
-  return sourceTabForNode(cellId) === appState.sourceTab;
+  const sourceTab = sourceTabForNode(cellId);
+  if (!sourceTab && (DATA.sourceTabs || []).length <= 1) return true;
+  return sourceTab === appState.sourceTab;
+}
+
+function cellHasRunData(cell){
+  const runs = DATA.cells[cell]?.runs;
+  return !!runs && typeof runs === 'object' && Object.keys(runs).length > 0;
+}
+
+function cellMatchesSelectedRun(cell){
+  if (!appState.run) return true;
+  if (!cellHasRunData(cell)) return !Array.isArray(DATA.runs) || DATA.runs.length === 0;
+  return Object.prototype.hasOwnProperty.call(DATA.cells[cell].runs, appState.run);
+}
+
+function cellMatchesSelectorScope(cell){
+  return cellMatchesSelectedSourceTab(cell) && cellMatchesSelectedRun(cell);
+}
+
+function formulaAvailableForCurrentRun(cell){
+  return !!DATA.formulas[cell] && cellMatchesSelectedRun(cell);
+}
+
+function cellsForSelectedSourceTab(){
+  return Object.keys(DATA.cells).filter(cellMatchesSelectedSourceTab);
 }
 
 function cellsForSelector() {
-  return Object.keys(DATA.cells).filter(cellMatchesSelectedSourceTab).sort((a, b) => {
+  return cellsForSelectedSourceTab().sort((a, b) => {
     if (appState.sortMode === 'cell') {
       const [ac, ar] = cellRefSortKey(a);
       const [bc, br] = cellRefSortKey(b);
@@ -1100,8 +1140,6 @@ function descriptionFor(cell){
 function preferredFieldFor(cell){
   const runEntry = DATA.cells[cell]?.runs?.[appState.run];
   if (runEntry?.field) return runEntry.field;
-  const xrdEntry = DATA.cells[cell]?.runs?.['XRD'];
-  if (xrdEntry?.field) return xrdEntry.field;
   const generic = genericFieldFor(cell);
   return generic || localCellForNode(cell);
 }
@@ -1112,142 +1150,92 @@ function primaryLabelForCell(cell){
 
 function optionLabelFor(cell){
   const field = preferredFieldFor(cell);
-  return `${field}  ·  ${cell}`;
+  const sourceTab = sourceTabForNode(cell);
+  const localCell = localCellForNode(cell);
+  const parts = [field];
+  if (sourceTab) parts.push(`Tab: ${sourceTab}`);
+  parts.push(localCell);
+  return parts.join('  ·  ');
+}
+
+function orderedRunsFromSet(runSet){
+  const ordered = DATA.runs.filter(run => runSet.has(run));
+  for (const run of runSet) {
+    if (!ordered.includes(run)) ordered.push(run);
+  }
+  return ordered;
+}
+
+function explicitRunsForCell(cell){
+  const runs = DATA.cells[cell]?.runs;
+  if (!runs || typeof runs !== 'object') return [];
+  return orderedRunsFromSet(new Set(Object.keys(runs)));
+}
+
+function updateRunScopeStatus(){
+  const cell = appState.rootCell;
+  const runs = explicitRunsForCell(cell);
+  runSelect.disabled = !cell || runs.length === 0;
+  if (!cell) {
+    runScopeStatus.textContent = 'Select a cell to see available runs.';
+    return;
+  }
+  const label = preferredFieldFor(cell);
+  if (!runs.length) {
+    runScopeStatus.textContent = `${label} has no run metadata.`;
+    return;
+  }
+  const count = runs.length === 1 ? '1 run' : `${runs.length} runs`;
+  runScopeStatus.textContent = `${label} is available in ${count}: ${runs.join(', ')}`;
 }
 
 function availableRunsForSelectedSourceTab(){
-  const visibleCells = cellsForSelector();
+  const selectedCell = appState.rootCell;
+  if (selectedCell && cellMatchesSelectedSourceTab(selectedCell)) {
+    const cellRuns = explicitRunsForCell(selectedCell);
+    if (cellRuns.length) return cellRuns;
+  }
+
+  const visibleCells = cellsForSelectedSourceTab();
   const runSet = new Set();
   for (const cell of visibleCells) {
     const runs = DATA.cells[cell]?.runs;
     if (!runs || typeof runs !== 'object') continue;
     for (const runName of Object.keys(runs)) runSet.add(runName);
   }
-  const ordered = DATA.runs.filter(run => runSet.has(run));
+  const ordered = orderedRunsFromSet(runSet);
   return ordered.length ? ordered : DATA.runs.slice();
 }
 
 function rebuildSelectors(){
   const oldRoot = appState.rootCell;
-  rootSelect.innerHTML = '';
-  for (const cell of cellsForSelector()) {
-    const opt = document.createElement('option');
-    opt.value = cell;
-    opt.textContent = optionLabelFor(cell);
-    rootSelect.appendChild(opt);
-  }
-  if (oldRoot && DATA.cells[oldRoot]) {
-    appState.rootCell = oldRoot;
-  } else {
-    appState.rootCell = DATA.formulaCells[0] || Object.keys(DATA.cells)[0] || null;
-  }
-  rootSelect.value = appState.rootCell || '';
-
-  if (!runSelect.options.length) {
-    for (const run of DATA.runs) {
+  const availableTabs = Array.isArray(DATA.sourceTabs) ? DATA.sourceTabs.slice() : [];
+  function populateRuns(availableRuns){
+    runSelect.innerHTML = '';
+    for (const run of availableRuns) {
       const opt = document.createElement('option');
       opt.value = run;
       opt.textContent = run;
       runSelect.appendChild(opt);
     }
+    if (!availableRuns.includes(appState.run)) appState.run = availableRuns[0] || '';
+    runSelect.value = appState.run;
   }
-  runSelect.value = appState.run;
-  backwardDepthSelect.value = String(appState.backwardDepth);
-  forwardDepthSelect.value = String(appState.forwardDepth);
-  sortModeInputs.forEach(inp => { inp.checked = inp.value === appState.sortMode; });
-}
-
-function cellsForSelector() {
-  return Object.keys(DATA.cells).filter(cellMatchesSelectedSourceTab).sort((a, b) => {
-    if (appState.sortMode === 'cell') {
-      const [ac, ar] = cellRefSortKey(a);
-      const [bc, br] = cellRefSortKey(b);
-      if (ac !== bc) return ac - bc;
-      if (ar !== br) return ar - br;
-      return a.localeCompare(b);
+  function populateRoots(visibleCells){
+    rootSelect.innerHTML = '';
+    for (const cell of visibleCells) {
+      const opt = document.createElement('option');
+      opt.value = cell;
+      opt.textContent = optionLabelFor(cell);
+      rootSelect.appendChild(opt);
     }
-    const aa = preferredFieldFor(a).toLowerCase();
-    const bb = preferredFieldFor(b).toLowerCase();
-    if (aa !== bb) return aa.localeCompare(bb);
-    return a.localeCompare(b);
-  });
-}
-
-function optionLabelFor(cell){
-  const field = preferredFieldFor(cell);
-  const sourceTab = sourceTabForNode(cell);
-  const localCell = localCellForNode(cell);
-  if (!sourceTab) return `${field}  ·  Cell: ${localCell}`;
-  return `${field}  ·  Source tab: ${sourceTab}  ·  Cell: ${localCell}`;
-}
-
-function rebuildSelectors(){
-  const oldRoot = appState.rootCell;
-  const availableTabs = Array.isArray(DATA.sourceTabs) ? DATA.sourceTabs.slice() : [];
-
-  sourceTabSelect.innerHTML = '';
-  const allTabsOpt = document.createElement('option');
-  allTabsOpt.value = '';
-  allTabsOpt.textContent = availableTabs.length > 1 ? 'All source tabs' : 'Primary source tab';
-  sourceTabSelect.appendChild(allTabsOpt);
-  for (const tab of availableTabs) {
-    const opt = document.createElement('option');
-    opt.value = tab;
-    opt.textContent = tab;
-    sourceTabSelect.appendChild(opt);
+    if (oldRoot && visibleCells.includes(oldRoot)) {
+      appState.rootCell = oldRoot;
+    } else {
+      appState.rootCell = visibleCells.find(cellHasRunData) || visibleCells[0] || null;
+    }
+    rootSelect.value = appState.rootCell || '';
   }
-  if (availableTabs.includes(appState.sourceTab)) {
-    sourceTabSelect.value = appState.sourceTab;
-  } else {
-    appState.sourceTab = '';
-    sourceTabSelect.value = '';
-  }
-
-  const visibleCells = cellsForSelector();
-  rootSelect.innerHTML = '';
-  for (const cell of visibleCells) {
-    const opt = document.createElement('option');
-    opt.value = cell;
-    opt.textContent = optionLabelFor(cell);
-    rootSelect.appendChild(opt);
-  }
-  if (oldRoot && visibleCells.includes(oldRoot)) {
-    appState.rootCell = oldRoot;
-  } else {
-    appState.rootCell = visibleCells.find(cell => DATA.formulas[cell]) || visibleCells[0] || null;
-  }
-  rootSelect.value = appState.rootCell || '';
-
-  const availableRuns = availableRunsForSelectedSourceTab();
-  runSelect.innerHTML = '';
-  for (const run of availableRuns) {
-    const opt = document.createElement('option');
-    opt.value = run;
-    opt.textContent = run;
-    runSelect.appendChild(opt);
-  }
-  if (!availableRuns.includes(appState.run)) appState.run = availableRuns[0] || '';
-  runSelect.value = appState.run;
-  backwardDepthSelect.value = String(appState.backwardDepth);
-  forwardDepthSelect.value = String(appState.forwardDepth);
-  sortModeInputs.forEach(inp => { inp.checked = inp.value === appState.sortMode; });
-}
-
-function optionLabelFor(cell){
-  const field = preferredFieldFor(cell);
-  const sourceTab = sourceTabForNode(cell);
-  const localCell = localCellForNode(cell);
-  if (appState.labelMode === 'field') {
-    if (!sourceTab) return `${field}  ·  Cell: ${localCell}`;
-    return `${field}  ·  Source tab: ${sourceTab}  ·  Cell: ${localCell}`;
-  }
-  if (!sourceTab) return `${localCell}  ·  Field: ${field}`;
-  return `${localCell}  ·  Source tab: ${sourceTab}  ·  Field: ${field}`;
-}
-
-function rebuildSelectors(){
-  const oldRoot = appState.rootCell;
-  const availableTabs = Array.isArray(DATA.sourceTabs) ? DATA.sourceTabs.slice() : [];
 
   sourceTabSelect.innerHTML = '';
   for (const tab of availableTabs) {
@@ -1263,156 +1251,20 @@ function rebuildSelectors(){
     sourceTabSelect.value = appState.sourceTab;
   }
 
-  const visibleCells = cellsForSelector();
-  rootSelect.innerHTML = '';
-  for (const cell of visibleCells) {
-    const opt = document.createElement('option');
-    opt.value = cell;
-    opt.textContent = optionLabelFor(cell);
-    rootSelect.appendChild(opt);
-  }
-  if (oldRoot && visibleCells.includes(oldRoot)) {
-    appState.rootCell = oldRoot;
-  } else {
-    appState.rootCell = visibleCells.find(cell => DATA.formulas[cell]) || visibleCells[0] || null;
-  }
-  rootSelect.value = appState.rootCell || '';
+  populateRuns(availableRunsForSelectedSourceTab());
 
-  runSelect.innerHTML = '';
-  for (const run of DATA.runs) {
-    const opt = document.createElement('option');
-    opt.value = run;
-    opt.textContent = run;
-    runSelect.appendChild(opt);
+  populateRoots(cellsForSelector());
+
+  const selectedRuns = explicitRunsForCell(appState.rootCell);
+  if (selectedRuns.length) {
+    populateRuns(selectedRuns);
+    populateRoots(cellsForSelector());
   }
-  if (!DATA.runs.includes(appState.run)) appState.run = DATA.runs[0] || '';
-  runSelect.value = appState.run;
+
   backwardDepthSelect.value = String(appState.backwardDepth);
   forwardDepthSelect.value = String(appState.forwardDepth);
   sortModeInputs.forEach(inp => { inp.checked = inp.value === appState.sortMode; });
-}
-
-function optionLabelFor(cell){
-  const field = preferredFieldFor(cell);
-  const sourceTab = sourceTabForNode(cell);
-  const localCell = localCellForNode(cell);
-  if (!sourceTab) return `${field}  ·  ${localCell}`;
-  return `${field}  ·  ${sourceTab}  ·  ${localCell}`;
-}
-
-function rebuildSelectors(){
-  const oldRoot = appState.rootCell;
-  const availableTabs = Array.isArray(DATA.sourceTabs) ? DATA.sourceTabs.slice() : [];
-
-  sourceTabSelect.innerHTML = '';
-  for (const tab of availableTabs) {
-    const opt = document.createElement('option');
-    opt.value = tab;
-    opt.textContent = tab;
-    sourceTabSelect.appendChild(opt);
-  }
-  if (availableTabs.includes(appState.sourceTab)) {
-    sourceTabSelect.value = appState.sourceTab;
-  } else {
-    appState.sourceTab = availableTabs[0] || '';
-    sourceTabSelect.value = appState.sourceTab;
-  }
-
-  const visibleCells = cellsForSelector();
-  rootSelect.innerHTML = '';
-  for (const cell of visibleCells) {
-    const opt = document.createElement('option');
-    opt.value = cell;
-    opt.textContent = optionLabelFor(cell);
-    rootSelect.appendChild(opt);
-  }
-  if (oldRoot && visibleCells.includes(oldRoot)) {
-    appState.rootCell = oldRoot;
-  } else {
-    appState.rootCell = visibleCells.find(cell => DATA.formulas[cell]) || visibleCells[0] || null;
-  }
-  rootSelect.value = appState.rootCell || '';
-
-  runSelect.innerHTML = '';
-  for (const run of DATA.runs) {
-    const opt = document.createElement('option');
-    opt.value = run;
-    opt.textContent = run;
-    runSelect.appendChild(opt);
-  }
-  if (!DATA.runs.includes(appState.run)) appState.run = DATA.runs[0] || '';
-  runSelect.value = appState.run;
-  backwardDepthSelect.value = String(appState.backwardDepth);
-  forwardDepthSelect.value = String(appState.forwardDepth);
-  sortModeInputs.forEach(inp => { inp.checked = inp.value === appState.sortMode; });
-}
-
-function optionLabelFor(cell){
-  const field = preferredFieldFor(cell);
-  const sourceTab = sourceTabForNode(cell);
-  const localCell = localCellForNode(cell);
-  if (!sourceTab) return `${field}  ·  ${localCell}`;
-  return `${field}  ·  ${sourceTab}  ·  ${localCell}`;
-}
-
-function availableRunsForSelectedSourceTab(){
-  const visibleCells = cellsForSelector();
-  const runSet = new Set();
-  for (const cell of visibleCells) {
-    const runs = DATA.cells[cell]?.runs;
-    if (!runs || typeof runs !== 'object') continue;
-    for (const runName of Object.keys(runs)) runSet.add(runName);
-  }
-  const ordered = DATA.runs.filter(run => runSet.has(run));
-  return ordered.length ? ordered : DATA.runs.slice();
-}
-
-function rebuildSelectors(){
-  const oldRoot = appState.rootCell;
-  const availableTabs = Array.isArray(DATA.sourceTabs) ? DATA.sourceTabs.slice() : [];
-
-  sourceTabSelect.innerHTML = '';
-  for (const tab of availableTabs) {
-    const opt = document.createElement('option');
-    opt.value = tab;
-    opt.textContent = tab;
-    sourceTabSelect.appendChild(opt);
-  }
-  if (availableTabs.includes(appState.sourceTab)) {
-    sourceTabSelect.value = appState.sourceTab;
-  } else {
-    appState.sourceTab = availableTabs[0] || '';
-    sourceTabSelect.value = appState.sourceTab;
-  }
-
-  const visibleCells = cellsForSelector();
-  rootSelect.innerHTML = '';
-  for (const cell of visibleCells) {
-    const opt = document.createElement('option');
-    opt.value = cell;
-    opt.textContent = optionLabelFor(cell);
-    rootSelect.appendChild(opt);
-  }
-  if (oldRoot && visibleCells.includes(oldRoot)) {
-    appState.rootCell = oldRoot;
-  } else {
-    appState.rootCell = visibleCells.find(cell => DATA.formulas[cell]) || visibleCells[0] || null;
-  }
-  rootSelect.value = appState.rootCell || '';
-
-  const availableRuns = availableRunsForSelectedSourceTab();
-  runSelect.innerHTML = '';
-  for (const run of availableRuns) {
-    const opt = document.createElement('option');
-    opt.value = run;
-    opt.textContent = run;
-    runSelect.appendChild(opt);
-  }
-  if (!availableRuns.includes(appState.run)) appState.run = availableRuns[0] || '';
-  runSelect.value = appState.run;
-  backwardDepthSelect.value = String(appState.backwardDepth);
-  forwardDepthSelect.value = String(appState.forwardDepth);
-  sortModeInputs.forEach(inp => { inp.checked = inp.value === appState.sortMode; });
+  updateRunScopeStatus();
 }
 
 function hue(index){ return PALETTE[index % PALETTE.length]; }
@@ -1426,7 +1278,7 @@ function isNamedRange(nodeId){
 
 function nodeTypeFor(nodeId){
   if (isNamedRange(nodeId)) return 'named';
-  if (DATA.formulas[nodeId]) return 'output';
+  if (formulaAvailableForCurrentRun(nodeId)) return 'output';
   if (DATA.cells[nodeId]) return 'input';
   return 'input';
 }
@@ -1478,6 +1330,7 @@ function inferredNamedRangeRefs(nodeId){
 }
 
 function refsFor(nodeId){
+  if (!formulaAvailableForCurrentRun(nodeId)) return [];
   const explicitRefs = Array.isArray(DATA.formulas[nodeId]?.refs) ? DATA.formulas[nodeId].refs.slice() : [];
   const inferredRefs = inferredNamedRangeRefs(nodeId);
   if (!inferredRefs.length) return explicitRefs;
@@ -1488,6 +1341,9 @@ function refsFor(nodeId){
   return merged;
 }
 
+function graphNodeAllowed(nodeId){
+  return isNamedRange(nodeId) || (cellMatchesSelectedSourceTab(nodeId) && cellMatchesSelectedRun(nodeId));
+}
 
 function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
   const backBest = new Map();
@@ -1500,6 +1356,7 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
     const [nodeId, dist] = backQueue.shift();
     if (dist >= backwardDepth) continue;
     for (const ref of refsFor(nodeId)) {
+      if (!graphNodeAllowed(ref)) continue;
       const nd = dist + 1;
       if (!backBest.has(ref) || nd < backBest.get(ref)) {
         backBest.set(ref, nd);
@@ -1513,6 +1370,7 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
     const [nodeId, dist] = forwardQueue.shift();
     if (dist >= forwardDepth) continue;
     for (const dep of DATA.dependents[nodeId] || []) {
+      if (!graphNodeAllowed(dep)) continue;
       const nd = dist + 1;
       if (!forwardBest.has(dep) || nd < forwardBest.get(dep)) {
         forwardBest.set(dep, nd);
@@ -1522,8 +1380,8 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
   }
 
   const allIds = new Set([root]);
-  for (const k of backBest.keys()) allIds.add(k);
-  for (const k of forwardBest.keys()) allIds.add(k);
+  for (const k of backBest.keys()) if (graphNodeAllowed(k)) allIds.add(k);
+  for (const k of forwardBest.keys()) if (graphNodeAllowed(k)) allIds.add(k);
 
   const nodes = [];
   for (const id of allIds) {
@@ -1544,7 +1402,7 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
       layer,
       field: preferredLabelForNode(id),
       description: descriptionForNode(id),
-      hasFormula: !!DATA.formulas[id],
+      hasFormula: formulaAvailableForCurrentRun(id),
       type: nodeTypeFor(id)
     });
   }
@@ -1553,6 +1411,7 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
   const edgeMap = new Map();
   function addEdge(source, target){
     if (!nodeById[source] || !nodeById[target] || source === target) return;
+    if (!graphNodeAllowed(source) || !graphNodeAllowed(target)) return;
     const sLayer = nodeById[source].layer;
     const tLayer = nodeById[target].layer;
     if (sLayer >= tLayer) return;
@@ -1562,7 +1421,9 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
 
   for (const n of nodes) {
     for (const ref of refsFor(n.id)) addEdge(ref, n.id);
-    for (const dep of DATA.dependents[n.id] || []) addEdge(n.id, dep);
+    for (const dep of DATA.dependents[n.id] || []) {
+      if (formulaAvailableForCurrentRun(dep)) addEdge(n.id, dep);
+    }
   }
   const edges = [...edgeMap.values()];
 
@@ -1616,7 +1477,7 @@ function buildBidirectionalGraph(root, backwardDepth, forwardDepth){
     const primary = n.field || n.id;
     const sourceTab = isNamedRange(n.id) ? '' : sourceTabForNode(n.id);
     const secondary = isNamedRange(n.id) ? 'Named range' : (sourceTab ? `Tab: ${sourceTab}` : 'Tab: -');
-    const tertiary = isNamedRange(n.id) ? '' : `Cell: ${localCellForNode(n.id)}`;
+    const tertiary = isNamedRange(n.id) ? '' : localCellForNode(n.id);
     n.label1 = primary;
     n.label2 = secondary;
     n.label3 = tertiary;
@@ -1793,7 +1654,13 @@ function hideGraphTooltip(){
 
 function renderGraph(){
   const root = appState.rootCell;
-  if (!root) return;
+  if (!root) {
+    graphSvg.innerHTML = '';
+    appState.graph = null;
+    appState.graphView = null;
+    hideGraphTooltip();
+    return;
+  }
   const layout = buildBidirectionalGraph(root, appState.backwardDepth, appState.forwardDepth);
   graphSvg.innerHTML = '';
   hideGraphTooltip();
@@ -2168,7 +2035,7 @@ function spanForToken(tok){
     cls = 'name';
   } else if (tok?.type === 'emptyarg') {
     cls = 'emptyarg';
-    text = '⟨empty⟩';
+    text = '<empty>';
     span.title = 'Empty placeholder argument preserved from the source formula';
   }
   span.className = cls;
@@ -2302,10 +2169,10 @@ function renderTree(){
   treeCell.textContent = cell ? (isNamedRange(cell) ? cell : `Cell: ${localCellForNode(cell)}`) : '';
 
   treeStage.innerHTML = '';
-  if (!cell || !DATA.formulas[cell]) {
+  if (!cell || !formulaAvailableForCurrentRun(cell)) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = 'No formula on this node. Click a formula node in the graph to inspect its formula.';
+    empty.textContent = 'No formula exists for this selected source tab and run.';
     treeStage.appendChild(empty);
     return;
   }
@@ -2328,7 +2195,7 @@ function renderTree(){
     const legend = document.createElement('div');
     legend.className = 'subtle';
     legend.style.marginTop = '10px';
-    legend.textContent = '⟨empty⟩ marks an empty placeholder argument preserved from the source formula.';
+    legend.textContent = '<empty> marks an empty placeholder argument preserved from the source formula.';
     treeStage.appendChild(legend);
   }
 }
@@ -2364,7 +2231,10 @@ function refreshAll(){
 
 rootSelect.addEventListener('change', () => {
   appState.rootCell = rootSelect.value;
+  const cellRuns = explicitRunsForCell(appState.rootCell);
+  if (cellRuns.length && !cellRuns.includes(appState.run)) appState.run = cellRuns[0];
   appState.inspectCell = appState.rootCell || null;
+  rebuildSelectors();
   renderGraph();
   renderTree();
 });
@@ -2373,7 +2243,7 @@ runSelect.addEventListener('change', () => {
   appState.run = runSelect.value;
   const currentRoot = appState.rootCell;
   rebuildSelectors();
-  if (currentRoot && cellMatchesSelectedSourceTab(currentRoot) && DATA.cells[currentRoot]) {
+  if (currentRoot && cellMatchesSelectorScope(currentRoot) && DATA.cells[currentRoot]) {
     appState.rootCell = currentRoot;
     rootSelect.value = currentRoot;
   }
