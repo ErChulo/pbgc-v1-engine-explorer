@@ -253,6 +253,9 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .warehouse-status .name{font-size:12px;font-weight:700;color:var(--text)}
 .warehouse-status .meta{font-size:11px;color:var(--muted)}
 .warehouse-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.warehouse-compare{display:grid;gap:8px;padding-top:2px}
+.warehouse-compare-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:center}
+.warehouse-compare-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .metric-tile{display:grid;gap:2px;padding:8px 9px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--panel-2) 62%, transparent)}
 .metric-tile .metric-label{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 .metric-tile .metric-value{font-size:14px;font-weight:750;color:var(--text);font-variant-numeric:tabular-nums}
@@ -274,7 +277,9 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
   .controls-grid{grid-template-columns:1fr}
   .drawer-utilities{grid-template-columns:1fr auto}
   .warehouse-row{grid-template-columns:1fr}
+  .warehouse-compare-grid{grid-template-columns:1fr}
   .warehouse-metrics{grid-template-columns:1fr}
+  .warehouse-compare-results{grid-template-columns:1fr}
 }
 
 </style>
@@ -617,6 +622,19 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <div id="warehouse-status-meta" class="meta">Uploaded summaries are stored locally in this browser.</div>
         </div>
         <div id="warehouse-metrics" class="warehouse-metrics" aria-label="Selected engine metrics"></div>
+        <div class="warehouse-compare" aria-label="Compare stored engines">
+          <label>Compare engines</label>
+          <div class="warehouse-compare-grid">
+            <select id="warehouse-compare-a" class="compact-select">
+              <option value="">Engine A</option>
+            </select>
+            <select id="warehouse-compare-b" class="compact-select">
+              <option value="">Engine B</option>
+            </select>
+            <button id="warehouse-compare-button" class="mini-button" type="button" disabled>Compare</button>
+          </div>
+          <div id="warehouse-compare-results" class="warehouse-compare-results" aria-live="polite"></div>
+        </div>
       </div>
       </div>
       <div class="drawer-section">
@@ -1094,6 +1112,10 @@ const warehouseDeleteButton = document.getElementById('warehouse-delete-button')
 const warehouseStatusName = document.getElementById('warehouse-status-name');
 const warehouseStatusMeta = document.getElementById('warehouse-status-meta');
 const warehouseMetrics = document.getElementById('warehouse-metrics');
+const warehouseCompareA = document.getElementById('warehouse-compare-a');
+const warehouseCompareB = document.getElementById('warehouse-compare-b');
+const warehouseCompareButton = document.getElementById('warehouse-compare-button');
+const warehouseCompareResults = document.getElementById('warehouse-compare-results');
 
 function datasetDisplayName(data, fallbackName){
   return fallbackName || data.engine_name || data.sheet_name || 'Loaded V1Summary.json';
@@ -1165,6 +1187,61 @@ function renderWarehouseMetrics(record){
     ['Hubs', risk.high_degree_hub_count || 0]
   ];
   for (const [label, value] of tiles) warehouseMetrics.appendChild(metricTile(label, value));
+}
+
+function scorePercent(value){
+  const pct = Math.round(clamp01(Number(value || 0)) * 100);
+  return `${pct}%`;
+}
+
+function updateWarehouseCompareButton(){
+  if (!warehouseCompareButton || !warehouseCompareA || !warehouseCompareB) return;
+  warehouseCompareButton.disabled = !warehouseCompareA.value || !warehouseCompareB.value || warehouseCompareA.value === warehouseCompareB.value;
+}
+
+function renderWarehouseCompareOptions(records, selectedA='', selectedB=''){
+  if (!warehouseCompareA || !warehouseCompareB) return;
+  const selects = [warehouseCompareA, warehouseCompareB];
+  for (const select of selects) {
+    const placeholder = select === warehouseCompareA ? 'Engine A' : 'Engine B';
+    select.innerHTML = '';
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = placeholder;
+    select.appendChild(empty);
+    for (const record of records) {
+      const opt = document.createElement('option');
+      opt.value = record.id;
+      opt.textContent = warehouseOptionLabel(record);
+      select.appendChild(opt);
+    }
+  }
+  warehouseCompareA.value = selectedA && records.some(record => record.id === selectedA) ? selectedA : (records[0]?.id || '');
+  const defaultB = records.find(record => record.id !== warehouseCompareA.value)?.id || '';
+  warehouseCompareB.value = selectedB && records.some(record => record.id === selectedB) ? selectedB : defaultB;
+  updateWarehouseCompareButton();
+}
+
+function renderWarehouseComparison(report){
+  if (!warehouseCompareResults) return;
+  warehouseCompareResults.innerHTML = '';
+  if (!report) {
+    warehouseCompareResults.appendChild(metricTile('Overall', '-'));
+    warehouseCompareResults.appendChild(metricTile('Top difference', '-'));
+    return;
+  }
+  const profile = report.profile_scores || {};
+  const family = report.family_distances || {};
+  const top = report.top_differences?.[0];
+  const tiles = [
+    ['Overall', scorePercent(profile.overall_weighted_similarity?.similarity)],
+    ['Formula', scorePercent(profile.formula_similarity?.similarity)],
+    ['Benefit', scorePercent(profile.benefit_architecture_similarity?.similarity)],
+    ['Risk', scorePercent(profile.risk_complexity_similarity?.similarity)],
+    ['Structure dist', family.structural_graph?.distance ?? 0],
+    ['Top difference', top ? `${top.family}: ${top.name}` : 'None']
+  ];
+  for (const [label, value] of tiles) warehouseCompareResults.appendChild(metricTile(label, value));
 }
 
 const WAREHOUSE_DB_NAME = 'pbgc-v1-engine-explorer';
@@ -1305,6 +1382,7 @@ async function refreshWarehouseList(selectedId=''){
     warehouseSelect.disabled = true;
     if (warehouseLoadButton) warehouseLoadButton.disabled = true;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = true;
+    renderWarehouseCompareOptions([]);
     updateWarehouseStatus('Warehouse unavailable', 'IndexedDB is not available in this browser.');
     return [];
   }
@@ -1332,6 +1410,7 @@ async function refreshWarehouseList(selectedId=''){
     if (warehouseLoadButton) warehouseLoadButton.disabled = !hasSelection;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = !hasSelection;
     renderWarehouseMetrics(records.find(record => record.id === nextId) || null);
+    renderWarehouseCompareOptions(records, warehouseCompareA?.value || nextId, warehouseCompareB?.value || '');
     updateWarehouseStatus(
       records.length ? `${records.length} stored engine${records.length === 1 ? '' : 's'}` : 'Browser warehouse',
       records.length ? 'Select an engine to load it into Explorer.' : 'Uploaded summaries are stored locally in this browser.'
@@ -1340,6 +1419,7 @@ async function refreshWarehouseList(selectedId=''){
   } catch (error) {
     console.error(error);
     renderWarehouseMetrics(null);
+    renderWarehouseCompareOptions([]);
     updateWarehouseStatus('Warehouse error', 'Could not read stored engines.');
     return [];
   }
@@ -1371,6 +1451,19 @@ async function deleteWarehouseEngine(id){
   await refreshWarehouseList();
 }
 
+async function compareWarehouseEngines(idA, idB){
+  if (!idA || !idB || idA === idB) throw new Error('Choose two different stored engines.');
+  const [recordA, recordB] = await Promise.all([warehouseGet(idA), warehouseGet(idB)]);
+  if (!recordA?.metrics || !recordB?.metrics) throw new Error('Both stored engines need metric warehouses.');
+  const report = compareMetricWarehouses(recordA.metrics, recordB.metrics);
+  renderWarehouseComparison(report);
+  updateWarehouseStatus(
+    'Comparison ready',
+    `${recordA.displayName || recordA.sourceName} vs ${recordB.displayName || recordB.sourceName}`
+  );
+  return report;
+}
+
 function applyLoadedSummary(rawSummary, sourceName, options={}){
   DATA = normalizeSummary(rawSummary);
   appState.run = DATA.runs.includes('XRD') ? 'XRD' : (DATA.runs[0] || '');
@@ -1387,6 +1480,7 @@ window.engineWarehouse = {
   refresh: refreshWarehouseList,
   putSummary: storeSummaryInWarehouse,
   load: loadWarehouseEngine,
+  compare: compareWarehouseEngines,
   delete: deleteWarehouseEngine,
   getAll: warehouseGetAll,
   get: warehouseGet
@@ -3550,6 +3644,9 @@ if (warehouseSelect) {
   });
 }
 
+if (warehouseCompareA) warehouseCompareA.addEventListener('change', updateWarehouseCompareButton);
+if (warehouseCompareB) warehouseCompareB.addEventListener('change', updateWarehouseCompareButton);
+
 if (warehouseLoadButton && warehouseSelect) {
   warehouseLoadButton.addEventListener('click', async () => {
     try {
@@ -3557,6 +3654,18 @@ if (warehouseLoadButton && warehouseSelect) {
     } catch (error) {
       console.error(error);
       updateWarehouseStatus('Load failed', 'Could not load the selected engine.');
+    }
+  });
+}
+
+if (warehouseCompareButton && warehouseCompareA && warehouseCompareB) {
+  warehouseCompareButton.addEventListener('click', async () => {
+    try {
+      await compareWarehouseEngines(warehouseCompareA.value, warehouseCompareB.value);
+    } catch (error) {
+      console.error(error);
+      renderWarehouseComparison(null);
+      updateWarehouseStatus('Compare failed', 'Choose two stored engines with metrics.');
     }
   });
 }

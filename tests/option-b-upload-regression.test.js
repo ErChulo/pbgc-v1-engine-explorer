@@ -38,7 +38,7 @@ function runBrowserHarness(browser, indexHtml, injection, tempPrefix) {
     '--no-first-run',
     '--disable-background-networking',
     '--allow-file-access-from-files',
-    '--virtual-time-budget=5000',
+    '--virtual-time-budget=10000',
     '--dump-dom',
     `file:///${harnessPath.replace(/\\/g, '/')}`
   ], { encoding: 'utf8', timeout: 20000 });
@@ -370,6 +370,115 @@ test('JSON upload stores normalized summary and metrics in browser warehouse', {
   assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Formulas' && tile.value === '1'));
   assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Metric rows' && Number(tile.value) > 10));
   assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Max depth'));
+});
+
+test('warehouse compare controls render profile similarity tiles for two stored engines', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const engineA = {
+    schema_version: 'warehouse-compare-a',
+    engine_name: 'Compare A',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement interest benefit', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } },
+          B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } }
+        },
+        formulas: {
+          A1: { cell: 'A1', formula: 'NPVF2(B1,Plan_Int)', refs: ['B1', 'Plan_Int'], functions: ['NPVF2'] }
+        }
+      }
+    },
+    namedRanges: ['Plan_Int']
+  };
+  const engineB = {
+    schema_version: 'warehouse-compare-b',
+    engine_name: 'Compare B',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: { cell: 'A1', genericField: 'QPSA_LUMP_SUM_BENEFIT', description: 'Qualified preretirement survivor lump sum', hasFormula: true, runs: { XRD: { field: 'QPSA_LUMP_SUM_BENEFIT', iob: 'O' } } },
+          B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } }
+        },
+        formulas: {
+          A1: { cell: 'A1', formula: 'QPSAPVF(B1,Plan_Int)', refs: ['B1', 'Plan_Int'], functions: ['QPSAPVF'] }
+        }
+      }
+    },
+    namedRanges: ['Plan_Int']
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function tiles(){
+    return Array.from(document.querySelectorAll('#warehouse-compare-results .metric-tile')).map(tile => ({
+      label: tile.querySelector('.metric-label')?.textContent || '',
+      value: tile.querySelector('.metric-value')?.textContent || ''
+    }));
+  }
+  async function waitFor(predicate, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+  try {
+    const recordA = await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(engineA)}), 'compare-a.json');
+    const recordB = await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(engineB)}), 'compare-b.json');
+    await engineWarehouse.refresh(recordB.id);
+    document.getElementById('warehouse-compare-a').value = recordA.id;
+    document.getElementById('warehouse-compare-b').value = recordB.id;
+    document.getElementById('warehouse-compare-a').dispatchEvent(new Event('change', { bubbles: true }));
+    document.getElementById('warehouse-compare-b').dispatchEvent(new Event('change', { bubbles: true }));
+    const report = await engineWarehouse.compare(recordA.id, recordB.id);
+    const rendered = await waitFor(() => tiles().some(tile => tile.label === 'Overall'));
+    if (!rendered) throw new Error('Comparison tiles did not render.');
+    result.ok = true;
+    result.checks = {
+      compareDisabled: document.getElementById('warehouse-compare-button').disabled,
+      selectedA: document.getElementById('warehouse-compare-a').value,
+      selectedB: document.getElementById('warehouse-compare-b').value,
+      tiles: tiles(),
+      status: document.getElementById('warehouse-status-name').textContent,
+      benefitDistance: report.family_distances.benefit_architecture.distance
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-compare-');
+
+  assert.equal(payload.checks.compareDisabled, false);
+  assert.ok(payload.checks.selectedA);
+  assert.ok(payload.checks.selectedB);
+  assert.notEqual(payload.checks.selectedA, payload.checks.selectedB);
+  assert.equal(payload.checks.status, 'Comparison ready');
+  assert.ok(payload.checks.benefitDistance > 0);
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Overall' && /%$/.test(tile.value)));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Formula' && /%$/.test(tile.value)));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Benefit' && /%$/.test(tile.value)));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Top difference' && tile.value !== 'None'));
 });
 
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
