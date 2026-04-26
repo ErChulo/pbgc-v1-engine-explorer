@@ -246,6 +246,16 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .upload-status{display:grid;gap:2px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:14px;background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent)}
 .upload-status .name{font-size:12px;font-weight:700;color:var(--text)}
 .upload-status .meta{font-size:11px;color:var(--muted)}
+.warehouse-block{display:grid;gap:8px}
+.warehouse-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center}
+.warehouse-row .mini-button{white-space:nowrap}
+.warehouse-status{display:grid;gap:2px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:12px;background:linear-gradient(180deg, color-mix(in srgb, var(--node-input-stroke) 5%, transparent), transparent)}
+.warehouse-status .name{font-size:12px;font-weight:700;color:var(--text)}
+.warehouse-status .meta{font-size:11px;color:var(--muted)}
+.warehouse-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.metric-tile{display:grid;gap:2px;padding:8px 9px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--panel-2) 62%, transparent)}
+.metric-tile .metric-label{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.metric-tile .metric-value{font-size:14px;font-weight:750;color:var(--text);font-variant-numeric:tabular-nums}
 .sort-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:12px;cursor:pointer;user-select:none}
 .sort-chip input{accent-color:var(--accent)}
 .drawer-notes{padding:0;border:0;background:transparent}
@@ -263,6 +273,8 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 @media (max-width: 640px){
   .controls-grid{grid-template-columns:1fr}
   .drawer-utilities{grid-template-columns:1fr auto}
+  .warehouse-row{grid-template-columns:1fr}
+  .warehouse-metrics{grid-template-columns:1fr}
 }
 
 </style>
@@ -590,6 +602,21 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <div id="upload-status-name" class="name">Embedded sample</div>
           <div id="upload-status-meta" class="meta">Client-side only · no server calls</div>
         </div>
+      </div>
+      <div class="warehouse-block" aria-label="Local engine warehouse">
+        <label for="warehouse-select">Warehouse</label>
+        <div class="warehouse-row">
+          <select id="warehouse-select" class="compact-select">
+            <option value="">No stored engines</option>
+          </select>
+          <button id="warehouse-load-button" class="mini-button" type="button" disabled>Load</button>
+          <button id="warehouse-delete-button" class="mini-button" type="button" disabled>Delete</button>
+        </div>
+        <div class="warehouse-status" aria-live="polite">
+          <div id="warehouse-status-name" class="name">Browser warehouse</div>
+          <div id="warehouse-status-meta" class="meta">Uploaded summaries are stored locally in this browser.</div>
+        </div>
+        <div id="warehouse-metrics" class="warehouse-metrics" aria-label="Selected engine metrics"></div>
       </div>
       </div>
       <div class="drawer-section">
@@ -1025,7 +1052,8 @@ const appState = {
   nodeSpacing: 100,
   theme: document.documentElement.dataset.theme || 'dark',
   graph: null,
-  graphView: null
+  graphView: null,
+  warehouseEngineId: ''
 };
 
 const PALETTE = [202, 156, 286, 42, 336, 118, 18, 224, 188, 258, 352, 82];
@@ -1060,6 +1088,12 @@ const loadJsonButton = document.getElementById('load-json-button');
 const loadJsonInput = document.getElementById('load-json-input');
 const uploadStatusName = document.getElementById('upload-status-name');
 const uploadStatusMeta = document.getElementById('upload-status-meta');
+const warehouseSelect = document.getElementById('warehouse-select');
+const warehouseLoadButton = document.getElementById('warehouse-load-button');
+const warehouseDeleteButton = document.getElementById('warehouse-delete-button');
+const warehouseStatusName = document.getElementById('warehouse-status-name');
+const warehouseStatusMeta = document.getElementById('warehouse-status-meta');
+const warehouseMetrics = document.getElementById('warehouse-metrics');
 
 function datasetDisplayName(data, fallbackName){
   return fallbackName || data.engine_name || data.sheet_name || 'Loaded V1Summary.json';
@@ -1080,15 +1114,283 @@ function updateUploadStatus(nameText, metaText){
   if (uploadStatusMeta) uploadStatusMeta.textContent = metaText;
 }
 
-function applyLoadedSummary(rawSummary, sourceName){
+function updateWarehouseStatus(nameText, metaText){
+  if (warehouseStatusName) warehouseStatusName.textContent = nameText;
+  if (warehouseStatusMeta) warehouseStatusMeta.textContent = metaText;
+}
+
+function formatMetricValue(value){
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value ?? '-');
+}
+
+function metricTile(label, value){
+  const tile = document.createElement('div');
+  tile.className = 'metric-tile';
+  const labelEl = document.createElement('div');
+  labelEl.className = 'metric-label';
+  labelEl.textContent = label;
+  const valueEl = document.createElement('div');
+  valueEl.className = 'metric-value';
+  valueEl.textContent = formatMetricValue(value);
+  tile.appendChild(labelEl);
+  tile.appendChild(valueEl);
+  return tile;
+}
+
+function renderWarehouseMetrics(record){
+  if (!warehouseMetrics) return;
+  warehouseMetrics.innerHTML = '';
+  if (!record) {
+    warehouseMetrics.appendChild(metricTile('Stored', 0));
+    warehouseMetrics.appendChild(metricTile('Metric rows', 0));
+    return;
+  }
+  const counts = record.counts || {};
+  const structural = record.metrics?.structural_metrics || {};
+  const risk = record.metrics?.operational_data_quality_metrics || {};
+  const tiles = [
+    ['Cells', counts.cells || 0],
+    ['Formulas', counts.formulas || 0],
+    ['Named ranges', counts.namedRanges || 0],
+    ['Tabs', counts.sourceTabs || 0],
+    ['Runs', counts.runs || 0],
+    ['Metric rows', counts.metricRows || (record.metricRows || []).length],
+    ['Max depth', structural.max_dependency_depth || 0],
+    ['Max fan in', structural.max_fan_in || 0],
+    ['Max fan out', structural.max_fan_out || 0],
+    ['Unresolved refs', risk.unresolved_reference_count || 0],
+    ['Empty args', risk.empty_argument_formula_count || 0],
+    ['Hubs', risk.high_degree_hub_count || 0]
+  ];
+  for (const [label, value] of tiles) warehouseMetrics.appendChild(metricTile(label, value));
+}
+
+const WAREHOUSE_DB_NAME = 'pbgc-v1-engine-explorer';
+const WAREHOUSE_DB_VERSION = 1;
+const WAREHOUSE_STORE = 'engines';
+const WAREHOUSE_TIMEOUT_MS = 1200;
+const warehouseMemoryRecords = new Map();
+
+function warehouseAvailable(){
+  return typeof indexedDB !== 'undefined';
+}
+
+function openWarehouseDb(){
+  if (!warehouseAvailable()) return Promise.reject(new Error('IndexedDB is not available in this browser.'));
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(WAREHOUSE_DB_NAME, WAREHOUSE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(WAREHOUSE_STORE)) {
+        const store = db.createObjectStore(WAREHOUSE_STORE, { keyPath: 'id' });
+        store.createIndex('importedAt', 'importedAt');
+        store.createIndex('displayName', 'displayName');
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open engine warehouse.'));
+  });
+}
+
+function warehouseRequest(method){
+  return openWarehouseDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(WAREHOUSE_STORE, method.write ? 'readwrite' : 'readonly');
+    const store = tx.objectStore(WAREHOUSE_STORE);
+    const request = method.run(store);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || tx.error || new Error('Warehouse request failed.'));
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error('Warehouse transaction failed.'));
+    };
+  }));
+}
+
+function withWarehouseTimeout(promise, fallbackValue){
+  let settled = false;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(typeof fallbackValue === 'function' ? fallbackValue() : fallbackValue);
+    }, WAREHOUSE_TIMEOUT_MS);
+    promise.then(value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }, error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      console.warn('Warehouse IndexedDB request fell back to memory.', error);
+      resolve(typeof fallbackValue === 'function' ? fallbackValue() : fallbackValue);
+    });
+  });
+}
+
+function warehousePut(record){
+  warehouseMemoryRecords.set(record.id, record);
+  return withWarehouseTimeout(
+    warehouseRequest({ write: true, run: store => store.put(record) }),
+    record.id
+  );
+}
+
+function warehouseGet(id){
+  return withWarehouseTimeout(
+    warehouseRequest({ run: store => store.get(id) }),
+    () => warehouseMemoryRecords.get(id)
+  );
+}
+
+function warehouseGetAll(){
+  return withWarehouseTimeout(
+    warehouseRequest({ run: store => store.getAll() }),
+    () => [...warehouseMemoryRecords.values()]
+  );
+}
+
+function warehouseDelete(id){
+  warehouseMemoryRecords.delete(id);
+  return withWarehouseTimeout(
+    warehouseRequest({ write: true, run: store => store.delete(id) }),
+    undefined
+  );
+}
+
+function engineRecordId(sourceName){
+  const seed = `${sourceName || 'engine'}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return seed.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 96);
+}
+
+function engineRecordFromSummary(summary, sourceName){
+  const displayName = datasetDisplayName(summary, sourceName);
+  const metrics = computeEngineMetrics(summary, displayName);
+  return {
+    id: engineRecordId(sourceName || displayName),
+    sourceName: sourceName || '',
+    displayName,
+    importedAt: new Date().toISOString(),
+    schemaVersion: summary.schema_version || '',
+    engineName: summary.engine_name || '',
+    summary,
+    metrics,
+    metricRows: metrics.rows,
+    counts: {
+      sourceTabs: (summary.sourceTabs || []).length,
+      runs: (summary.runs || []).length,
+      cells: Object.keys(summary.cells || {}).length,
+      formulas: Object.keys(summary.formulas || {}).length,
+      namedRanges: (summary.namedRanges || []).length,
+      metricRows: (metrics.rows || []).length
+    }
+  };
+}
+
+function warehouseOptionLabel(record){
+  const counts = record.counts || {};
+  const formulaCount = Number(counts.formulas || 0);
+  const tabCount = Number(counts.sourceTabs || 0);
+  return `${record.displayName || record.sourceName || record.id} (${formulaCount} formulas, ${tabCount} tabs)`;
+}
+
+async function refreshWarehouseList(selectedId=''){
+  if (!warehouseSelect) return [];
+  if (!warehouseAvailable()) {
+    warehouseSelect.innerHTML = '<option value="">Warehouse unavailable</option>';
+    warehouseSelect.disabled = true;
+    if (warehouseLoadButton) warehouseLoadButton.disabled = true;
+    if (warehouseDeleteButton) warehouseDeleteButton.disabled = true;
+    updateWarehouseStatus('Warehouse unavailable', 'IndexedDB is not available in this browser.');
+    return [];
+  }
+  try {
+    const records = (await warehouseGetAll()).sort((a, b) => String(b.importedAt || '').localeCompare(String(a.importedAt || '')));
+    warehouseSelect.innerHTML = '';
+    if (!records.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No stored engines';
+      warehouseSelect.appendChild(opt);
+    } else {
+      for (const record of records) {
+        const opt = document.createElement('option');
+        opt.value = record.id;
+        opt.textContent = warehouseOptionLabel(record);
+        warehouseSelect.appendChild(opt);
+      }
+    }
+    const nextId = selectedId && records.some(record => record.id === selectedId)
+      ? selectedId
+      : (records[0]?.id || '');
+    warehouseSelect.value = nextId;
+    const hasSelection = !!nextId;
+    if (warehouseLoadButton) warehouseLoadButton.disabled = !hasSelection;
+    if (warehouseDeleteButton) warehouseDeleteButton.disabled = !hasSelection;
+    renderWarehouseMetrics(records.find(record => record.id === nextId) || null);
+    updateWarehouseStatus(
+      records.length ? `${records.length} stored engine${records.length === 1 ? '' : 's'}` : 'Browser warehouse',
+      records.length ? 'Select an engine to load it into Explorer.' : 'Uploaded summaries are stored locally in this browser.'
+    );
+    return records;
+  } catch (error) {
+    console.error(error);
+    renderWarehouseMetrics(null);
+    updateWarehouseStatus('Warehouse error', 'Could not read stored engines.');
+    return [];
+  }
+}
+
+async function storeSummaryInWarehouse(summary, sourceName){
+  const record = engineRecordFromSummary(summary, sourceName);
+  await warehousePut(record);
+  await refreshWarehouseList(record.id);
+  appState.warehouseEngineId = record.id;
+  updateWarehouseStatus('Stored in warehouse', warehouseOptionLabel(record));
+  return record;
+}
+
+async function loadWarehouseEngine(id){
+  if (!id) return null;
+  const record = await warehouseGet(id);
+  if (!record?.summary) throw new Error('Stored engine record is missing its summary.');
+  applyLoadedSummary(record.summary, record.displayName || record.sourceName, { engineId: record.id });
+  await refreshWarehouseList(record.id);
+  updateWarehouseStatus('Loaded from warehouse', warehouseOptionLabel(record));
+  return record;
+}
+
+async function deleteWarehouseEngine(id){
+  if (!id) return;
+  await warehouseDelete(id);
+  if (appState.warehouseEngineId === id) appState.warehouseEngineId = '';
+  await refreshWarehouseList();
+}
+
+function applyLoadedSummary(rawSummary, sourceName, options={}){
   DATA = normalizeSummary(rawSummary);
   appState.run = DATA.runs.includes('XRD') ? 'XRD' : (DATA.runs[0] || '');
   appState.sourceTab = DATA.sourceTabs?.[0] || '';
   appState.rootCell = null;
   appState.inspectCell = null;
+  appState.warehouseEngineId = options.engineId || '';
   updateUploadStatus(datasetDisplayName(DATA, sourceName), datasetDisplayMeta(DATA));
   refreshAll();
+  return DATA;
 }
+
+window.engineWarehouse = {
+  refresh: refreshWarehouseList,
+  putSummary: storeSummaryInWarehouse,
+  load: loadWarehouseEngine,
+  delete: deleteWarehouseEngine,
+  getAll: warehouseGetAll,
+  get: warehouseGet
+};
 
 function escapeHtml(s){
   return String(s ?? '')
@@ -1391,6 +1693,335 @@ function refsFor(nodeId){
   }
   return merged;
 }
+
+function metricTypeFor(value){
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'number') return 'number';
+  if (Array.isArray(value)) return 'array';
+  if (value && typeof value === 'object') return 'object';
+  return 'string';
+}
+
+function metricRowsForFamily(engineId, familyName, metrics, source){
+  return Object.entries(metrics || {}).map(([metricName, metricValue]) => ({
+    engine_id: engineId,
+    metric_family: familyName,
+    metric_name: metricName,
+    metric_value: metricValue,
+    metric_type: metricTypeFor(metricValue),
+    source
+  }));
+}
+
+function textMatchesAny(text, patterns){
+  const value = String(text || '').toLowerCase();
+  return patterns.some(pattern => value.includes(pattern));
+}
+
+function benefitCategoryForText(text){
+  const categories = [];
+  const rules = {
+    retirement: ['retire', 'retirement', 'erd', 'eurd', 'nrd', 'xrd', 'rbd'],
+    death: ['death', 'dod', 'survivor', 'beneficiary', 'spouse'],
+    qpsa: ['qpsa', 'qualified preretirement survivor'],
+    lump_sum: ['lump', 'ls_', 'ls ', 'pvf_lev_ls', 'pvf_qpsa_ls'],
+    vesting: ['vest', 'yos', 'service'],
+    mortality: ['mort', 'lx(', 'male_tab', 'female_tab'],
+    interest: ['interest', 'int_', 'plan_int', 'rate'],
+    compensation: ['comp', 'covered_comp', 'salary', 'pay']
+  };
+  for (const [category, patterns] of Object.entries(rules)) {
+    if (textMatchesAny(text, patterns)) categories.push(category);
+  }
+  return categories;
+}
+
+function maxParenthesisDepth(text){
+  let depth = 0;
+  let maxDepth = 0;
+  let inString = false;
+  const value = String(text || '');
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === '"') {
+      if (inString && value[i + 1] === '"') {
+        i++;
+      } else {
+        inString = !inString;
+      }
+    }
+    if (inString) continue;
+    if (ch === '(') {
+      depth++;
+      maxDepth = Math.max(maxDepth, depth);
+    } else if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+    }
+  }
+  return maxDepth;
+}
+
+function formulaHasEmptyArgument(text){
+  return /[(,]\s*,|,\s*\)/.test(String(text || ''));
+}
+
+function countFormulaConstants(text){
+  const value = stripQuotedStrings(text || '');
+  const numbers = value.match(/(^|[^A-Za-z_])[-+]?\d+(?:\.\d+)?/g) || [];
+  const strings = String(text || '').match(/"(?:[^"]|"")*"/g) || [];
+  return numbers.length + strings.length;
+}
+
+function countFormulaOperators(text){
+  const value = stripQuotedStrings(text || '');
+  const matches = value.match(/<>|>=|<=|[+\-*/^&=<>]/g) || [];
+  return matches.length;
+}
+
+function sourceTabForDataNode(data, nodeId){
+  if (data.cells?.[nodeId]?.sheet) return data.cells[nodeId].sheet;
+  if (data.cells?.[nodeId]?.sourceTab) return data.cells[nodeId].sourceTab;
+  if (data.formulas?.[nodeId]?.sheet) return data.formulas[nodeId].sheet;
+  return splitQualifiedToken(nodeId).sheet || '';
+}
+
+function hasMeaningfulCellMetadata(cell){
+  if (!cell || typeof cell !== 'object') return false;
+  if (cell.genericField || cell.description || cell.hasFormula) return true;
+  return !!(cell.runs && typeof cell.runs === 'object' && Object.keys(cell.runs).length);
+}
+
+function computeEngineGraphModel(data){
+  const namedRanges = new Set(data.namedRanges || []);
+  const nodes = new Set([...Object.keys(data.cells || {}), ...namedRanges]);
+  const edges = [];
+  const unresolvedRefs = [];
+
+  for (const [cellId, formulaRecord] of Object.entries(data.formulas || {})) {
+    nodes.add(cellId);
+    const refs = Array.isArray(formulaRecord.refs) ? formulaRecord.refs : [];
+    for (const ref of refs) {
+      if (!ref) continue;
+      const refCell = data.cells?.[ref];
+      const refIsKnownCell = !!refCell && (isCellAddressToken(ref) || hasMeaningfulCellMetadata(refCell));
+      const refIsKnown = refIsKnownCell || !!data.formulas?.[ref] || namedRanges.has(ref);
+      if (!refIsKnown) {
+        unresolvedRefs.push({ source: cellId, ref });
+      }
+      nodes.add(ref);
+      edges.push({ source: ref, target: cellId });
+    }
+  }
+
+  return { nodes: [...nodes], edges, unresolvedRefs };
+}
+
+function computeDegreeStats(nodes, edges){
+  const inDegree = new Map(nodes.map(node => [node, 0]));
+  const outDegree = new Map(nodes.map(node => [node, 0]));
+  for (const edge of edges) {
+    inDegree.set(edge.target, (inDegree.get(edge.target) || 0) + 1);
+    outDegree.set(edge.source, (outDegree.get(edge.source) || 0) + 1);
+  }
+  const maxIn = Math.max(0, ...inDegree.values());
+  const maxOut = Math.max(0, ...outDegree.values());
+  const isolated = nodes.filter(node => !inDegree.get(node) && !outDegree.get(node)).length;
+  const hubs = nodes.filter(node => (inDegree.get(node) || 0) + (outDegree.get(node) || 0) >= 20).length;
+  return { inDegree, outDegree, maxIn, maxOut, isolated, hubs };
+}
+
+function computeConnectedComponents(nodes, edges){
+  const adjacency = new Map(nodes.map(node => [node, new Set()]));
+  for (const edge of edges) {
+    if (!adjacency.has(edge.source)) adjacency.set(edge.source, new Set());
+    if (!adjacency.has(edge.target)) adjacency.set(edge.target, new Set());
+    adjacency.get(edge.source).add(edge.target);
+    adjacency.get(edge.target).add(edge.source);
+  }
+  const seen = new Set();
+  let components = 0;
+  for (const node of adjacency.keys()) {
+    if (seen.has(node)) continue;
+    components++;
+    const queue = [node];
+    seen.add(node);
+    while (queue.length) {
+      const current = queue.shift();
+      for (const next of adjacency.get(current) || []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return components;
+}
+
+function computeDirectedGraphDepth(edges){
+  const outgoing = new Map();
+  const nodes = new Set();
+  for (const edge of edges) {
+    nodes.add(edge.source);
+    nodes.add(edge.target);
+    if (!outgoing.has(edge.source)) outgoing.set(edge.source, []);
+    outgoing.get(edge.source).push(edge.target);
+  }
+  const state = new Map();
+  const memo = new Map();
+  const cycleNodes = new Set();
+
+  function visit(node){
+    if (state.get(node) === 'visiting') {
+      cycleNodes.add(node);
+      return 0;
+    }
+    if (state.get(node) === 'done') return memo.get(node) || 0;
+    state.set(node, 'visiting');
+    let best = 0;
+    for (const next of outgoing.get(node) || []) {
+      best = Math.max(best, 1 + visit(next));
+      if (state.get(next) === 'visiting') cycleNodes.add(next);
+    }
+    state.set(node, 'done');
+    memo.set(node, best);
+    return best;
+  }
+
+  let maxDepth = 0;
+  for (const node of nodes) maxDepth = Math.max(maxDepth, visit(node));
+  return { maxDepth, cycleNodeCount: cycleNodes.size };
+}
+
+function computeEngineMetrics(data, engineId='current'){
+  const graph = computeEngineGraphModel(data);
+  const degree = computeDegreeStats(graph.nodes, graph.edges);
+  const depth = computeDirectedGraphDepth(graph.edges);
+  const formulas = Object.values(data.formulas || {});
+  const cells = Object.values(data.cells || {});
+  const functionCounts = {};
+  const categoryCounts = {};
+  const iobCounts = {};
+  let operatorCount = 0;
+  let constantCount = 0;
+  let maxFormulaNestingDepth = 0;
+  let emptyArgumentFormulaCount = 0;
+
+  for (const formula of formulas) {
+    const formulaText = formula.formula || '';
+    operatorCount += countFormulaOperators(formulaText);
+    constantCount += countFormulaConstants(formulaText);
+    maxFormulaNestingDepth = Math.max(maxFormulaNestingDepth, maxParenthesisDepth(formulaText));
+    if (formulaHasEmptyArgument(formulaText)) emptyArgumentFormulaCount++;
+    for (const fn of formula.functions || []) {
+      const key = String(fn || '').toUpperCase();
+      if (key) functionCounts[key] = (functionCounts[key] || 0) + 1;
+    }
+  }
+
+  for (const [cellId, cell] of Object.entries(data.cells || {})) {
+    const semanticText = [
+      cell.genericField,
+      cell.description,
+      sourceTabForDataNode(data, cellId)
+    ].join(' ');
+    for (const category of benefitCategoryForText(semanticText)) {
+      categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+    }
+    for (const runRec of Object.values(cell.runs || {})) {
+      const iob = String(runRec?.iob || '').toUpperCase() || 'UNKNOWN';
+      iobCounts[iob] = (iobCounts[iob] || 0) + 1;
+    }
+  }
+
+  for (const namedRange of data.namedRanges || []) {
+    for (const category of benefitCategoryForText(namedRange)) {
+      categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+    }
+  }
+
+  const fieldSet = new Set();
+  const inputFieldSet = new Set();
+  const outputFieldSet = new Set();
+  for (const cell of cells) {
+    if (cell.genericField) fieldSet.add(cell.genericField);
+    for (const runRec of Object.values(cell.runs || {})) {
+      if (runRec?.field) fieldSet.add(runRec.field);
+      const iob = String(runRec?.iob || '').toUpperCase();
+      if (iob === 'I' && runRec?.field) inputFieldSet.add(runRec.field);
+      if (iob === 'O' && runRec?.field) outputFieldSet.add(runRec.field);
+    }
+  }
+
+  const metrics = {
+    engine_id: engineId,
+    structural_metrics: {
+      node_count: graph.nodes.length,
+      edge_count: graph.edges.length,
+      formula_cell_count: Object.keys(data.formulas || {}).length,
+      named_range_count: (data.namedRanges || []).length,
+      max_dependency_depth: depth.maxDepth,
+      max_fan_in: degree.maxIn,
+      max_fan_out: degree.maxOut,
+      isolated_node_count: degree.isolated,
+      disconnected_component_count: computeConnectedComponents(graph.nodes, graph.edges)
+    },
+    semantic_field_metrics: {
+      source_tab_count: (data.sourceTabs || []).length,
+      run_count: (data.runs || []).length,
+      distinct_field_count: fieldSet.size,
+      distinct_input_field_count: inputFieldSet.size,
+      distinct_output_field_count: outputFieldSet.size,
+      iob_role_counts: iobCounts
+    },
+    formula_implementation_metrics: {
+      distinct_function_count: Object.keys(functionCounts).length,
+      function_counts: functionCounts,
+      operator_count: operatorCount,
+      constant_count: constantCount,
+      max_formula_nesting_depth: maxFormulaNestingDepth,
+      formula_with_named_range_ref_count: formulas.filter(formula => (formula.refs || []).some(ref => (data.namedRanges || []).includes(ref))).length
+    },
+    benefit_architecture_metrics: {
+      category_counts: categoryCounts,
+      has_retirement_logic: !!categoryCounts.retirement,
+      has_death_logic: !!categoryCounts.death,
+      has_qpsa_logic: !!categoryCounts.qpsa,
+      has_lump_sum_logic: !!categoryCounts.lump_sum,
+      has_vesting_logic: !!categoryCounts.vesting,
+      has_mortality_logic: !!categoryCounts.mortality,
+      has_interest_logic: !!categoryCounts.interest,
+      has_compensation_logic: !!categoryCounts.compensation
+    },
+    operational_data_quality_metrics: {
+      unresolved_reference_count: graph.unresolvedRefs.length,
+      unresolved_references_sample: graph.unresolvedRefs.slice(0, 12),
+      empty_argument_formula_count: emptyArgumentFormulaCount,
+      circularity_node_count: depth.cycleNodeCount,
+      high_degree_hub_count: degree.hubs
+    }
+  };
+  metrics.rows = flattenEngineMetrics(metrics);
+  return metrics;
+}
+
+function flattenEngineMetrics(metricBundle){
+  const engineId = metricBundle.engine_id || 'current';
+  return [
+    ...metricRowsForFamily(engineId, 'structural', metricBundle.structural_metrics, 'graph'),
+    ...metricRowsForFamily(engineId, 'semantic', metricBundle.semantic_field_metrics, 'field_dictionary'),
+    ...metricRowsForFamily(engineId, 'formula', metricBundle.formula_implementation_metrics, 'formula_parser'),
+    ...metricRowsForFamily(engineId, 'benefit_architecture', metricBundle.benefit_architecture_metrics, 'semantic_classifier'),
+    ...metricRowsForFamily(engineId, 'operational_risk', metricBundle.operational_data_quality_metrics, 'formula_parser')
+  ];
+}
+
+function computeCurrentEngineMetrics(){
+  return computeEngineMetrics(DATA, datasetDisplayName(DATA, 'current'));
+}
+
+window.computeEngineMetrics = computeEngineMetrics;
+window.flattenEngineMetrics = flattenEngineMetrics;
+window.computeCurrentEngineMetrics = computeCurrentEngineMetrics;
 
 function graphNodeAllowed(nodeId){
   return isNamedRange(nodeId) || (cellMatchesSelectedSourceTab(nodeId) && cellMatchesSelectedRun(nodeId));
@@ -2378,7 +3009,13 @@ if (loadJsonButton && loadJsonInput) {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
-      applyLoadedSummary(parsed, file.name);
+      const summary = applyLoadedSummary(parsed, file.name);
+      try {
+        await storeSummaryInWarehouse(summary, file.name);
+      } catch (warehouseError) {
+        console.error(warehouseError);
+        updateWarehouseStatus('Warehouse save failed', 'The file loaded, but it was not stored locally.');
+      }
     } catch (error) {
       console.error(error);
       updateUploadStatus(
@@ -2387,6 +3024,42 @@ if (loadJsonButton && loadJsonInput) {
       );
     } finally {
       loadJsonInput.value = '';
+    }
+  });
+}
+
+if (warehouseSelect) {
+  warehouseSelect.addEventListener('change', async () => {
+    const hasSelection = !!warehouseSelect.value;
+    if (warehouseLoadButton) warehouseLoadButton.disabled = !hasSelection;
+    if (warehouseDeleteButton) warehouseDeleteButton.disabled = !hasSelection;
+    try {
+      renderWarehouseMetrics(hasSelection ? await warehouseGet(warehouseSelect.value) : null);
+    } catch (error) {
+      console.error(error);
+      renderWarehouseMetrics(null);
+    }
+  });
+}
+
+if (warehouseLoadButton && warehouseSelect) {
+  warehouseLoadButton.addEventListener('click', async () => {
+    try {
+      await loadWarehouseEngine(warehouseSelect.value);
+    } catch (error) {
+      console.error(error);
+      updateWarehouseStatus('Load failed', 'Could not load the selected engine.');
+    }
+  });
+}
+
+if (warehouseDeleteButton && warehouseSelect) {
+  warehouseDeleteButton.addEventListener('click', async () => {
+    try {
+      await deleteWarehouseEngine(warehouseSelect.value);
+    } catch (error) {
+      console.error(error);
+      updateWarehouseStatus('Delete failed', 'Could not delete the selected engine.');
     }
   });
 }
@@ -2425,6 +3098,7 @@ if (drawerToggle) {
 document.documentElement.dataset.theme = appState.theme;
 initializeGraphInteractions();
 updateUploadStatus(datasetDisplayName(DATA, 'Embedded sample dataset'), datasetDisplayMeta(DATA));
+refreshWarehouseList();
 refreshAll();
 </script>
 </body>

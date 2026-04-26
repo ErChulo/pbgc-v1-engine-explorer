@@ -225,6 +225,153 @@ test('Option B JSON upload scopes source tab/run and keeps tree toggle local', {
   assert.equal(afterToggle.treeField, 'BDOB');
 });
 
+test('JSON upload stores normalized summary and metrics in browser warehouse', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const warehouseData = {
+    schema_version: 'warehouse-regression',
+    engine_name: 'Warehouse Regression',
+    sourceTabs: ['Warehouse Tab'],
+    runs: ['XRD'],
+    worksheets: {
+      'Warehouse Tab': {
+        runs: ['XRD'],
+        cells: {
+          A1: {
+            cell: 'A1',
+            genericField: 'FORMULA_OUTPUT',
+            description: 'Stored formula output',
+            hasFormula: true,
+            runs: { XRD: { field: 'FORMULA_OUTPUT', iob: 'O' } }
+          },
+          B1: {
+            cell: 'B1',
+            genericField: 'INPUT_B',
+            description: 'Stored input',
+            hasFormula: false,
+            runs: { XRD: { field: 'INPUT_B', iob: 'I' } }
+          }
+        },
+        formulas: {
+          A1: { cell: 'A1', formula: 'ROUND(B1,2)', refs: ['B1'], functions: ['ROUND'] }
+        },
+        formulaCells: ['A1'],
+        dependents: { B1: ['A1'] }
+      }
+    },
+    namedRanges: []
+  };
+  const otherData = {
+    schema_version: 'other',
+    engine_name: 'Other',
+    sourceTabs: ['Other Tab'],
+    runs: ['XRD'],
+    worksheets: {
+      'Other Tab': {
+        runs: ['XRD'],
+        cells: {
+          C1: {
+            cell: 'C1',
+            genericField: 'OTHER_CELL',
+            description: 'Other cell',
+            hasFormula: false,
+            runs: { XRD: { field: 'OTHER_CELL', iob: 'I' } }
+          }
+        }
+      }
+    },
+    namedRanges: []
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function selectedText(id){ const el = document.getElementById(id); return el?.selectedOptions?.[0]?.textContent?.trim() || ''; }
+  function metricTiles(){
+    return Array.from(document.querySelectorAll('#warehouse-metrics .metric-tile')).map(tile => ({
+      label: tile.querySelector('.metric-label')?.textContent || '',
+      value: tile.querySelector('.metric-value')?.textContent || ''
+    }));
+  }
+  async function waitFor(predicate, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+  try {
+    if (!window.indexedDB) throw new Error('IndexedDB unavailable');
+    const input = document.getElementById('load-json-input');
+    const file = new File([JSON.stringify(${JSON.stringify(warehouseData)})], 'warehouse-regression.json', { type: 'application/json' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const stored = await waitFor(async () => {
+      const records = await engineWarehouse.getAll();
+      return records.some(record => record.sourceName === 'warehouse-regression.json');
+    });
+    if (!stored) throw new Error('Uploaded engine was not stored.');
+
+    const records = await engineWarehouse.getAll();
+    const record = records.find(item => item.sourceName === 'warehouse-regression.json');
+    applyLoadedSummary(${JSON.stringify(otherData)}, 'other.json');
+    await engineWarehouse.load(record.id);
+
+    result.ok = true;
+    result.checks = {
+      sourceName: record.sourceName,
+      displayName: record.displayName,
+      counts: record.counts,
+      metricFamilies: Array.from(new Set(record.metricRows.map(row => row.metric_family))).sort(),
+      storedFormulaRows: record.metricRows.filter(row => row.metric_family === 'formula').length,
+      loadedRoot: selectedText('root-select'),
+      loadedSource: document.getElementById('source-tab-select').value,
+      selectedWarehouse: document.getElementById('warehouse-select').value,
+      loadDisabled: document.getElementById('warehouse-load-button').disabled,
+      metricTiles: metricTiles()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-upload-');
+
+  assert.equal(payload.checks.sourceName, 'warehouse-regression.json');
+  assert.equal(payload.checks.displayName, 'warehouse-regression.json');
+  assert.equal(payload.checks.counts.formulas, 1);
+  assert.ok(payload.checks.counts.metricRows > 10);
+  assert.deepEqual(payload.checks.metricFamilies, [
+    'benefit_architecture',
+    'formula',
+    'operational_risk',
+    'semantic',
+    'structural'
+  ]);
+  assert.ok(payload.checks.storedFormulaRows > 0);
+  assert.match(payload.checks.loadedRoot, /^FORMULA_OUTPUT\s+/);
+  assert.equal(payload.checks.loadedSource, 'Warehouse Tab');
+  assert.ok(payload.checks.selectedWarehouse);
+  assert.equal(payload.checks.loadDisabled, false);
+  assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Formulas' && tile.value === '1'));
+  assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Metric rows' && Number(tile.value) > 10));
+  assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Max depth'));
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {
@@ -532,4 +679,101 @@ test('sample 4 AEQ_INTEREST renders Plan_Int named range precedent', { timeout: 
   assert.match(payload.checks.treeText, /Plan_Int/);
   assert.ok(payload.checks.graphNodes.includes('Separated!IE2'));
   assert.ok(payload.checks.graphNodes.includes('Plan_Int'));
+});
+
+test('metric router emits distance vocabulary families and flat warehouse rows', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const data = {
+    schema_version: 'metric-router-regression',
+    engine_name: 'Metric Router Regression',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: {
+            cell: 'A1',
+            genericField: 'RETIREMENT_BENEFIT',
+            description: 'Retirement benefit with QPSA and interest logic',
+            hasFormula: true,
+            runs: { XRD: { field: 'RETIREMENT_BENEFIT', iob: 'O' } }
+          },
+          B1: {
+            cell: 'B1',
+            genericField: 'INTEREST_INPUT',
+            description: 'Plan interest rate',
+            hasFormula: false,
+            runs: { XRD: { field: 'INTEREST_INPUT', iob: 'I' } }
+          }
+        },
+        formulas: {
+          A1: {
+            cell: 'A1',
+            formula: 'ROUND(B1*Plan_Int,,)',
+            refs: ['B1', 'Plan_Int', 'Missing_Name'],
+            functions: ['ROUND']
+          }
+        },
+        formulaCells: ['A1'],
+        dependents: { B1: ['A1'], Plan_Int: ['A1'] }
+      }
+    },
+    namedRanges: ['Plan_Int']
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  try {
+    const normalized = normalizeSummary(${JSON.stringify(data)});
+    const metrics = computeEngineMetrics(normalized, 'E_METRIC');
+    result.ok = true;
+    result.checks = {
+      structural: metrics.structural_metrics,
+      semantic: metrics.semantic_field_metrics,
+      formula: metrics.formula_implementation_metrics,
+      benefit: metrics.benefit_architecture_metrics,
+      operational: metrics.operational_data_quality_metrics,
+      rowFamilies: Array.from(new Set(metrics.rows.map(row => row.metric_family))).sort(),
+      nodeCountRow: metrics.rows.find(row => row.metric_name === 'node_count')
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'metric-router-');
+
+  assert.equal(payload.checks.structural.formula_cell_count, 1);
+  assert.equal(payload.checks.structural.edge_count, 3);
+  assert.equal(payload.checks.semantic.distinct_input_field_count, 1);
+  assert.equal(payload.checks.semantic.distinct_output_field_count, 1);
+  assert.equal(payload.checks.formula.function_counts.ROUND, 1);
+  assert.equal(payload.checks.benefit.has_qpsa_logic, true);
+  assert.equal(payload.checks.benefit.has_interest_logic, true);
+  assert.equal(payload.checks.operational.unresolved_reference_count, 1);
+  assert.equal(payload.checks.operational.empty_argument_formula_count, 1);
+  assert.deepEqual(payload.checks.rowFamilies, [
+    'benefit_architecture',
+    'formula',
+    'operational_risk',
+    'semantic',
+    'structural'
+  ]);
+  assert.equal(payload.checks.nodeCountRow.engine_id, 'E_METRIC');
+  assert.equal(payload.checks.nodeCountRow.metric_type, 'number');
+  assert.equal(payload.checks.nodeCountRow.source, 'graph');
 });
