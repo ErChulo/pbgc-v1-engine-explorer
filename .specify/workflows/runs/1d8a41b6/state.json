@@ -1,0 +1,31 @@
+{
+  "run_id": "1d8a41b6",
+  "workflow_id": "speckit",
+  "status": "failed",
+  "current_step_index": 0,
+  "current_step_id": "specify",
+  "step_results": {
+    "specify": {
+      "integration": "codex",
+      "model": null,
+      "options": {},
+      "input": {
+        "args": "Build an Approved V1 Reuse Candidate Report and warehouse scaling hardening layer for the PBGC V1 Engine Explorer. The feature should use the existing browser-local V1 engine warehouse, metric extraction, aggregate analysis, pairwise comparison, and current-engine match ranking. It should produce an explainable reuse-candidate report for a selected or current engine against stored approved V1 engines, include overall similarity plus benefit architecture, formula, semantic field, structural, and operational risk scores, list top similarities and top differences, flag missing evidence and data-quality risks, and prepare the warehouse for larger libraries through deterministic caching, schema versioning, migration handling for older stored records, import/export of warehouse records, and performance tests with synthetic warehouses. Do not integrate R5 yet; leave R5/provision-state-machine mapping as a future bridge once paired R5 and V1 evidence exists."
+      },
+      "output": {
+        "command": "speckit.specify",
+        "integration": "codex",
+        "model": null,
+        "options": {},
+        "input": {
+          "args": "Build an Approved V1 Reuse Candidate Report and warehouse scaling hardening layer for the PBGC V1 Engine Explorer. The feature should use the existing browser-local V1 engine warehouse, metric extraction, aggregate analysis, pairwise comparison, and current-engine match ranking. It should produce an explainable reuse-candidate report for a selected or current engine against stored approved V1 engines, include overall similarity plus benefit architecture, formula, semantic field, structural, and operational risk scores, list top similarities and top differences, flag missing evidence and data-quality risks, and prepare the warehouse for larger libraries through deterministic caching, schema versioning, migration handling for older stored records, import/export of warehouse records, and performance tests with synthetic warehouses. Do not integrate R5 yet; leave R5/provision-state-machine mapping as a future bridge once paired R5 and V1 evidence exists."
+        },
+        "exit_code": 1,
+        "dispatched": false
+      },
+      "status": "failed"
+    }
+  },
+  "created_at": "2026-04-27T22:25:29.019025+00:00",
+  "updated_at": "2026-04-27T22:25:29.294515+00:00"
+}

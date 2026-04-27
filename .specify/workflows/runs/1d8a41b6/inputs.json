@@ -1,0 +1,7 @@
+{
+  "inputs": {
+    "spec": "Build an Approved V1 Reuse Candidate Report and warehouse scaling hardening layer for the PBGC V1 Engine Explorer. The feature should use the existing browser-local V1 engine warehouse, metric extraction, aggregate analysis, pairwise comparison, and current-engine match ranking. It should produce an explainable reuse-candidate report for a selected or current engine against stored approved V1 engines, include overall similarity plus benefit architecture, formula, semantic field, structural, and operational risk scores, list top similarities and top differences, flag missing evidence and data-quality risks, and prepare the warehouse for larger libraries through deterministic caching, schema versioning, migration handling for older stored records, import/export of warehouse records, and performance tests with synthetic warehouses. Do not integrate R5 yet; leave R5/provision-state-machine mapping as a future bridge once paired R5 and V1 evidence exists.",
+    "integration": "codex",
+    "scope": "full"
+  }
+}
