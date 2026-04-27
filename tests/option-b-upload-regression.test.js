@@ -38,7 +38,7 @@ function runBrowserHarness(browser, indexHtml, injection, tempPrefix) {
     '--no-first-run',
     '--disable-background-networking',
     '--allow-file-access-from-files',
-    '--virtual-time-budget=10000',
+    '--virtual-time-budget=20000',
     '--dump-dom',
     `file:///${harnessPath.replace(/\\/g, '/')}`
   ], { encoding: 'utf8', timeout: 20000 });
@@ -932,6 +932,112 @@ test('warehouse match ranking emits reuse candidate reports with warnings and ev
   assert.match(payload.checks.card.diff, /Top difference:/);
   assert.match(payload.checks.card.evidence, /Strongest similarity:/);
   assert.match(payload.checks.card.warning, /Review:/);
+});
+
+test('warehouse validates, recomputes, and skips records for ranking diagnostics', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const summary = {
+    schema_version: 'warehouse-diagnostics',
+    engine_name: 'Diagnostics Engine',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement benefit', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } },
+          B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } }
+        },
+        formulas: {
+          A1: { cell: 'A1', formula: 'ROUND(B1,2)', refs: ['B1'], functions: ['ROUND'] }
+        }
+      }
+    },
+    namedRanges: []
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  try {
+    applyLoadedSummary(${JSON.stringify(summary)}, 'diagnostics-current.json');
+    const currentRecord = await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(summary)}), 'current-record.json');
+    const currentValidation = validateWarehouseRecord(currentRecord);
+
+    const missingMetrics = {
+      id: 'missing-metrics-record',
+      sourceName: 'missing-metrics.json',
+      displayName: 'Missing Metrics',
+      importedAt: new Date().toISOString(),
+      schemaVersion: 'warehouse-diagnostics',
+      summary: normalizeSummary(${JSON.stringify(summary)}),
+      counts: { cells: 2, formulas: 1, sourceTabs: 1, runs: 1, namedRanges: 0, metricRows: 0 }
+    };
+    const stale = {
+      ...currentRecord,
+      id: 'stale-record',
+      sourceName: 'stale.json',
+      displayName: 'Stale Metrics',
+      metricVersion: 'v0.1',
+      metrics: { ...currentRecord.metrics, metric_version: 'v0.1' }
+    };
+    const unusable = {
+      id: 'unusable-record',
+      sourceName: 'unusable.json',
+      displayName: 'Unusable Record',
+      importedAt: new Date().toISOString()
+    };
+    await Promise.all([
+      engineWarehouse.putRaw(missingMetrics),
+      engineWarehouse.putRaw(stale),
+      engineWarehouse.putRaw(unusable)
+    ]);
+    await engineWarehouse.refresh();
+    const matches = await engineWarehouse.rankMatchesForCurrent({ limit: 5, excludeId: currentRecord.id });
+    const diagnostics = matches.diagnostics || [];
+    const refreshedMissing = await engineWarehouse.get('missing-metrics-record');
+    const refreshedStale = await engineWarehouse.get('stale-record');
+    result.ok = true;
+    result.checks = {
+      currentMetricVersion: currentRecord.metricVersion,
+      currentMetricsVersion: currentRecord.metrics.metric_version,
+      currentValidationStatus: currentValidation.status,
+      matchNames: matches.map(match => match.engine_name).sort(),
+      diagnostics: diagnostics.map(item => ({ id: item.record_id, status: item.status, reason: item.reason })),
+      missingRecomputed: !!refreshedMissing.metrics && refreshedMissing.metricVersion === 'v0.7',
+      staleMigrated: !!refreshedStale.metrics && refreshedStale.metricVersion === 'v0.7',
+      unusableSkipped: diagnostics.some(item => item.record_id === 'unusable-record' && item.status === 'skipped')
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-diagnostics-');
+
+  assert.equal(payload.checks.currentMetricVersion, 'v0.7');
+  assert.equal(payload.checks.currentMetricsVersion, 'v0.7');
+  assert.equal(payload.checks.currentValidationStatus, 'current');
+  assert.ok(payload.checks.matchNames.includes('Missing Metrics'));
+  assert.ok(payload.checks.matchNames.includes('Stale Metrics'));
+  assert.ok(!payload.checks.matchNames.includes('Unusable Record'));
+  assert.equal(payload.checks.missingRecomputed, true);
+  assert.equal(payload.checks.staleMigrated, true);
+  assert.equal(payload.checks.unusableSkipped, true);
+  assert.ok(payload.checks.diagnostics.some(item => item.id === 'missing-metrics-record' && item.status === 'recomputed'));
+  assert.ok(payload.checks.diagnostics.some(item => item.id === 'stale-record' && item.status === 'migrated'));
 });
 
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {

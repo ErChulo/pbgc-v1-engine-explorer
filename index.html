@@ -1542,8 +1542,18 @@ function rankWarehouseMatchesForMetrics(targetMetrics, records, options={}){
   const limit = Number(options.limit || 5);
   const excludeId = options.excludeId || '';
   const rows = [];
+  const diagnostics = options.diagnostics || [];
   for (const record of records || []) {
-    if (!record?.metrics) continue;
+    if (!record?.metrics) {
+      diagnostics.push({
+        record_id: record?.id || '',
+        record_name: record?.displayName || record?.sourceName || record?.id || 'Unknown record',
+        status: 'skipped',
+        reason: 'missing_metrics',
+        message: 'Record did not include metric warehouse data.'
+      });
+      continue;
+    }
     if (excludeId && record.id === excludeId) continue;
     const report = compareMetricWarehouses(targetMetrics, record.metrics);
     const profile = report.profile_scores || {};
@@ -1625,17 +1635,121 @@ function renderWarehouseMatches(matches){
   });
 }
 
+function summarizeRecordCounts(summary){
+  return {
+    sourceTabs: (summary.sourceTabs || []).length,
+    runs: (summary.runs || []).length,
+    cells: Object.keys(summary.cells || {}).length,
+    formulas: Object.keys(summary.formulas || {}).length,
+    namedRanges: (summary.namedRanges || []).length
+  };
+}
+
+function validateWarehouseRecord(record){
+  if (!record || typeof record !== 'object') {
+    return { status: 'unusable', reason: 'not_object', message: 'Record is not an object.' };
+  }
+  if (!record.metrics && !record.summary) {
+    return { record_id: record.id || '', status: 'unusable', reason: 'missing_summary_and_metrics', message: 'Record has neither summary nor metrics.' };
+  }
+  if (!record.metrics && record.summary) {
+    return { record_id: record.id || '', status: 'recomputable', reason: 'missing_metrics', message: 'Record has a summary but no metrics.' };
+  }
+  const version = record.metricVersion || record.metrics?.metric_version || '';
+  if (version !== CURRENT_METRIC_VERSION) {
+    if (record.summary) {
+      return { record_id: record.id || '', status: 'stale', reason: 'metric_version_mismatch', metric_version: version, expected_metric_version: CURRENT_METRIC_VERSION, message: 'Record metrics are stale and can be recomputed.' };
+    }
+    return { record_id: record.id || '', status: 'unusable', reason: 'stale_metrics_without_summary', metric_version: version, expected_metric_version: CURRENT_METRIC_VERSION, message: 'Record metrics are stale and no summary is available for recomputation.' };
+  }
+  return { record_id: record.id || '', status: 'current', reason: 'metric_version_current', metric_version: version, message: 'Record metrics are current.' };
+}
+
+function recomputeWarehouseRecordMetrics(record){
+  const summary = normalizeSummary(record.summary);
+  const displayName = record.displayName || datasetDisplayName(summary, record.sourceName || record.id);
+  const metrics = computeEngineMetrics(summary, displayName);
+  metrics.metric_version = CURRENT_METRIC_VERSION;
+  const counts = {
+    ...summarizeRecordCounts(summary),
+    metricRows: (metrics.rows || []).length
+  };
+  return {
+    ...record,
+    displayName,
+    schemaVersion: summary.schema_version || record.schemaVersion || '',
+    engineName: summary.engine_name || record.engineName || '',
+    summary,
+    metrics,
+    metricVersion: CURRENT_METRIC_VERSION,
+    metricRows: metrics.rows,
+    counts
+  };
+}
+
+async function prepareWarehouseRecordsForRanking(records){
+  const usable = [];
+  const diagnostics = [];
+  for (const record of records || []) {
+    const validation = validateWarehouseRecord(record);
+    const baseDiagnostic = {
+      record_id: record?.id || validation.record_id || '',
+      record_name: record?.displayName || record?.sourceName || record?.id || 'Unknown record',
+      ...validation
+    };
+    if (validation.status === 'current') {
+      usable.push(record);
+      diagnostics.push(baseDiagnostic);
+      continue;
+    }
+    if (validation.status === 'recomputable' || validation.status === 'stale') {
+      try {
+        const refreshed = recomputeWarehouseRecordMetrics(record);
+        await warehousePut(refreshed);
+        usable.push(refreshed);
+        diagnostics.push({
+          ...baseDiagnostic,
+          status: validation.status === 'stale' ? 'migrated' : 'recomputed',
+          metric_version: CURRENT_METRIC_VERSION,
+          message: validation.status === 'stale' ? 'Record metrics were recomputed for the current metric version.' : 'Missing metrics were recomputed from the stored summary.'
+        });
+      } catch (error) {
+        diagnostics.push({
+          ...baseDiagnostic,
+          status: 'skipped',
+          reason: 'metric_recompute_failed',
+          message: String(error && error.message || error)
+        });
+      }
+      continue;
+    }
+    diagnostics.push({
+      ...baseDiagnostic,
+      status: 'skipped'
+    });
+  }
+  return { records: usable, diagnostics };
+}
+
 async function rankMatchesForCurrentEngine(options={}){
-  const records = await warehouseGetAll();
+  const rawRecords = await warehouseGetAll();
+  const prepared = await prepareWarehouseRecordsForRanking(rawRecords);
   const targetMetrics = currentEngineWarehouseMetrics();
-  const matches = rankWarehouseMatchesForMetrics(targetMetrics, records, {
+  const comparisonDiagnostics = [];
+  const matches = rankWarehouseMatchesForMetrics(targetMetrics, prepared.records, {
     limit: options.limit || 5,
-    excludeId: appState.warehouseEngineId || options.excludeId || ''
+    excludeId: appState.warehouseEngineId || options.excludeId || '',
+    diagnostics: comparisonDiagnostics
   });
+  const diagnostics = [...prepared.diagnostics, ...comparisonDiagnostics];
+  matches.diagnostics = diagnostics;
+  for (const match of matches) match.diagnostics = diagnostics.filter(item => item.record_id === match.engine_id);
   renderWarehouseMatches(matches);
   updateWarehouseMatchStatus(
     matches.length ? `${matches.length} candidate${matches.length === 1 ? '' : 's'} ranked` : 'No candidates',
-    matches.length ? `Best match: ${matches[0].engine_name} (${scorePercent(matches[0].overall_similarity)})` : 'Store more engines to rank reuse candidates.'
+    matches.length
+      ? `Best match: ${matches[0].engine_name} (${scorePercent(matches[0].overall_similarity)})`
+      : (diagnostics.some(item => item.status === 'skipped') ? 'No usable stored engines were available.' : 'Store more engines to rank reuse candidates.')
   );
   return matches;
 }
@@ -1644,6 +1758,7 @@ const WAREHOUSE_DB_NAME = 'pbgc-v1-engine-explorer';
 const WAREHOUSE_DB_VERSION = 1;
 const WAREHOUSE_STORE = 'engines';
 const WAREHOUSE_TIMEOUT_MS = 1200;
+const CURRENT_METRIC_VERSION = 'v0.7';
 const warehouseMemoryRecords = new Map();
 
 function warehouseAvailable(){
@@ -1752,6 +1867,7 @@ function engineRecordFromSummary(summary, sourceName){
     engineName: summary.engine_name || '',
     summary,
     metrics,
+    metricVersion: CURRENT_METRIC_VERSION,
     metricRows: metrics.rows,
     counts: {
       sourceTabs: (summary.sourceTabs || []).length,
@@ -1882,6 +1998,7 @@ function applyLoadedSummary(rawSummary, sourceName, options={}){
 window.engineWarehouse = {
   refresh: refreshWarehouseList,
   putSummary: storeSummaryInWarehouse,
+  putRaw: warehousePut,
   load: loadWarehouseEngine,
   compare: compareWarehouseEngines,
   aggregate: computeWarehouseAggregate,
@@ -2547,6 +2664,7 @@ function computeEngineMetrics(data, engineId='current'){
 
   const metrics = {
     engine_id: engineId,
+    metric_version: CURRENT_METRIC_VERSION,
     structural_metrics: {
       node_count: nodeCount,
       edge_count: edgeCount,
@@ -3028,6 +3146,8 @@ window.compareMetricWarehouses = compareMetricWarehouses;
 window.compareEngines = compareEngines;
 window.explainTopDifferences = explainTopDifferences;
 window.reuseCandidateReportFromMatch = reuseCandidateReportFromMatch;
+window.validateWarehouseRecord = validateWarehouseRecord;
+window.prepareWarehouseRecordsForRanking = prepareWarehouseRecordsForRanking;
 window.computeEngineMetrics = computeEngineMetrics;
 window.flattenEngineMetrics = flattenEngineMetrics;
 window.computeCurrentEngineMetrics = computeCurrentEngineMetrics;

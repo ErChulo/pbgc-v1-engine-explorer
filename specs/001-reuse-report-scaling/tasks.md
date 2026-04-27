@@ -13,11 +13,11 @@
 
 ## Phase 2: Warehouse Versioning and Diagnostics
 
-- [ ] T006 [US3] Add metric version metadata to newly stored warehouse records in `index.html`.
-- [ ] T007 [US3] Implement validation for stored records: current, stale, recomputable, or unusable.
-- [ ] T008 [US3] Recompute metrics for records with valid summaries but missing/stale metrics.
-- [ ] T009 [US3] Skip unusable records with explicit diagnostics instead of silent omission.
-- [ ] T010 [US3] Add browser tests for older records, missing metrics, missing summary, and migration diagnostics.
+- [x] T006 [US3] Add metric version metadata to newly stored warehouse records in `index.html`.
+- [x] T007 [US3] Implement validation for stored records: current, stale, recomputable, or unusable.
+- [x] T008 [US3] Recompute metrics for records with valid summaries but missing/stale metrics.
+- [x] T009 [US3] Skip unusable records with explicit diagnostics instead of silent omission.
+- [x] T010 [US3] Add browser tests for older records, missing metrics, missing summary, and migration diagnostics.
 
 ## Phase 3: Import/Export
 
