@@ -481,6 +481,126 @@ test('warehouse compare controls render profile similarity tiles for two stored 
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Top difference' && tile.value !== 'None'));
 });
 
+test('warehouse aggregate analysis summarizes stored V1 engine library', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function engine(engineName, field, description, formula, functions, refs, namedRanges = ['Plan_Int']) {
+    return {
+      schema_version: 'warehouse-aggregate',
+      engine_name: engineName,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: field, description, hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Final average compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } },
+            C1: { cell: 'C1', genericField: 'SERVICE', description: 'Credited service input', hasFormula: false, runs: { XRD: { field: 'SERVICE', iob: 'I' } } }
+          },
+          formulas: {
+            A1: { cell: 'A1', formula, refs, functions }
+          }
+        }
+      },
+      namedRanges
+    };
+  }
+  const retirement = engine(
+    'Aggregate Retirement',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with interest and mortality assumptions',
+    'NPVF2(B1*C1,Plan_Int)',
+    ['NPVF2'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const survivor = engine(
+    'Aggregate Survivor',
+    'QPSA_LUMP_SUM_BENEFIT',
+    'Qualified preretirement survivor lump sum beneficiary benefit',
+    'QPSAPVF(B1*C1,Plan_Int)',
+    ['QPSAPVF'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const risky = engine(
+    'Aggregate Risky',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with unresolved reference',
+    'ROUND(B1*Missing_Name,,)',
+    ['ROUND'],
+    ['B1', 'Missing_Name'],
+    []
+  );
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function tiles(){
+    return Array.from(document.querySelectorAll('#warehouse-aggregate-results .metric-tile')).map(tile => ({
+      label: tile.querySelector('.metric-label')?.textContent || '',
+      value: tile.querySelector('.metric-value')?.textContent || ''
+    }));
+  }
+  async function waitFor(predicate, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+  try {
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(retirement)}), 'aggregate-retirement.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(survivor)}), 'aggregate-survivor.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(risky)}), 'aggregate-risky.json');
+    const records = await engineWarehouse.refresh();
+    const summary = engineWarehouse.aggregate(records);
+    const rendered = await waitFor(() => tiles().some(tile => tile.label === 'Engines' && tile.value === '3'));
+    if (!rendered) throw new Error('Aggregate tiles did not render.');
+    result.ok = true;
+    result.checks = {
+      engineCount: summary.engine_count,
+      commonDomains: summary.common_benefit_domains.map(item => item.name),
+      commonFunctions: summary.common_functions.map(item => item.name),
+      highestRisk: summary.highest_risk_engine.name,
+      pairCount: summary.pairwise_spread.pairCount,
+      hasMostSimilar: !!summary.pairwise_spread.mostSimilar,
+      hasMostDistinct: !!summary.pairwise_spread.mostDistinct,
+      tiles: tiles()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-aggregate-');
+
+  assert.equal(payload.checks.engineCount, 3);
+  assert.ok(payload.checks.commonDomains.includes('normal_retirement'));
+  assert.ok(payload.checks.commonDomains.includes('qpsa'));
+  assert.ok(payload.checks.commonFunctions.includes('NPVF2'));
+  assert.ok(payload.checks.commonFunctions.includes('QPSAPVF'));
+  assert.equal(payload.checks.highestRisk, 'aggregate-risky.json');
+  assert.equal(payload.checks.pairCount, 3);
+  assert.equal(payload.checks.hasMostSimilar, true);
+  assert.equal(payload.checks.hasMostDistinct, true);
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Engines' && tile.value === '3'));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Benefit domains' && tile.value.includes('normal_retirement')));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Functions' && tile.value.includes('NPVF2')));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Highest risk' && tile.value.includes('aggregate-risky.json')));
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

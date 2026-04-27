@@ -253,6 +253,8 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .warehouse-status .name{font-size:12px;font-weight:700;color:var(--text)}
 .warehouse-status .meta{font-size:11px;color:var(--muted)}
 .warehouse-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.warehouse-aggregate{display:grid;gap:8px;padding-top:2px}
+.warehouse-aggregate-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .warehouse-compare{display:grid;gap:8px;padding-top:2px}
 .warehouse-compare-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:center}
 .warehouse-compare-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
@@ -279,6 +281,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
   .warehouse-row{grid-template-columns:1fr}
   .warehouse-compare-grid{grid-template-columns:1fr}
   .warehouse-metrics{grid-template-columns:1fr}
+  .warehouse-aggregate-results{grid-template-columns:1fr}
   .warehouse-compare-results{grid-template-columns:1fr}
 }
 
@@ -622,6 +625,10 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
           <div id="warehouse-status-meta" class="meta">Uploaded summaries are stored locally in this browser.</div>
         </div>
         <div id="warehouse-metrics" class="warehouse-metrics" aria-label="Selected engine metrics"></div>
+        <div class="warehouse-aggregate" aria-label="Warehouse aggregate analysis">
+          <label>Aggregate analysis</label>
+          <div id="warehouse-aggregate-results" class="warehouse-aggregate-results" aria-live="polite"></div>
+        </div>
         <div class="warehouse-compare" aria-label="Compare stored engines">
           <label>Compare engines</label>
           <div class="warehouse-compare-grid">
@@ -1112,6 +1119,7 @@ const warehouseDeleteButton = document.getElementById('warehouse-delete-button')
 const warehouseStatusName = document.getElementById('warehouse-status-name');
 const warehouseStatusMeta = document.getElementById('warehouse-status-meta');
 const warehouseMetrics = document.getElementById('warehouse-metrics');
+const warehouseAggregateResults = document.getElementById('warehouse-aggregate-results');
 const warehouseCompareA = document.getElementById('warehouse-compare-a');
 const warehouseCompareB = document.getElementById('warehouse-compare-b');
 const warehouseCompareButton = document.getElementById('warehouse-compare-button');
@@ -1187,6 +1195,177 @@ function renderWarehouseMetrics(record){
     ['Hubs', risk.high_degree_hub_count || 0]
   ];
   for (const [label, value] of tiles) warehouseMetrics.appendChild(metricTile(label, value));
+}
+
+function addCounts(target, source){
+  for (const [key, value] of Object.entries(source || {})) {
+    const n = Number(value || 0);
+    if (Number.isFinite(n)) target[key] = (target[key] || 0) + n;
+  }
+  return target;
+}
+
+function topCountEntries(counts, limit=4){
+  return Object.entries(counts || {})
+    .filter(([, value]) => Number(value || 0) > 0)
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0) || a[0].localeCompare(b[0]))
+    .slice(0, limit);
+}
+
+function formatTopCounts(counts, limit=4){
+  const entries = topCountEntries(counts, limit);
+  if (!entries.length) return '-';
+  return entries.map(([name, value]) => `${name}: ${formatMetricValue(value)}`).join(', ');
+}
+
+function recordRiskScore(record){
+  const risk = record?.metrics?.operational_data_quality_metrics || {};
+  return Number(risk.unresolved_reference_count || 0) * 3
+    + Number(risk.unresolved_named_range_count || 0) * 2
+    + Number(risk.unknown_tab_reference_count || 0) * 2
+    + Number(risk.parse_error_count || 0) * 3
+    + Number(risk.empty_argument_formula_count || 0)
+    + Number(risk.circularity_node_count || 0) * 3
+    + Number(risk.high_degree_hub_count || 0)
+    + Number(risk.excessive_formula_nesting_count || 0);
+}
+
+function recordComplexityScore(record){
+  const structural = record?.metrics?.structural_metrics || {};
+  const formula = record?.metrics?.formula_implementation_metrics || {};
+  return Number(structural.node_count || 0)
+    + Number(structural.edge_count || 0)
+    + Number(structural.max_dependency_depth || 0) * 5
+    + Number(structural.high_degree_hub_count || 0) * 10
+    + Number(formula.average_formula_length || 0) / 20;
+}
+
+function bestRecordBy(records, scorer){
+  let best = null;
+  let bestScore = -Infinity;
+  for (const record of records || []) {
+    const score = scorer(record);
+    if (score > bestScore) {
+      best = record;
+      bestScore = score;
+    }
+  }
+  return { record: best, score: Number((Number.isFinite(bestScore) ? bestScore : 0).toFixed(3)) };
+}
+
+function pairwiseWarehouseSpread(records){
+  if (!records || records.length < 2) return { pairCount: 0, mostSimilar: null, mostDistinct: null };
+  let mostSimilar = null;
+  let mostDistinct = null;
+  let pairCount = 0;
+  for (let i = 0; i < records.length; i++) {
+    for (let j = i + 1; j < records.length; j++) {
+      const a = records[i];
+      const b = records[j];
+      if (!a?.metrics || !b?.metrics) continue;
+      const report = compareMetricWarehouses(a.metrics, b.metrics);
+      const score = report.profile_scores.overall_weighted_similarity;
+      const row = {
+        engine_a_id: a.id,
+        engine_b_id: b.id,
+        engine_a_name: a.displayName || a.sourceName || a.id,
+        engine_b_name: b.displayName || b.sourceName || b.id,
+        distance: score.distance,
+        similarity: score.similarity
+      };
+      pairCount++;
+      if (!mostSimilar || row.similarity > mostSimilar.similarity) mostSimilar = row;
+      if (!mostDistinct || row.distance > mostDistinct.distance) mostDistinct = row;
+    }
+  }
+  return { pairCount, mostSimilar, mostDistinct };
+}
+
+function computeWarehouseAggregate(records){
+  const engines = Array.isArray(records) ? records : [];
+  const totals = { cells: 0, formulas: 0, sourceTabs: 0, runs: 0, namedRanges: 0, metricRows: 0 };
+  const benefitDomains = {};
+  const functions = {};
+  const depths = [];
+  const formulaCounts = [];
+  const riskScores = [];
+
+  for (const record of engines) {
+    const counts = record.counts || {};
+    totals.cells += Number(counts.cells || 0);
+    totals.formulas += Number(counts.formulas || 0);
+    totals.sourceTabs += Number(counts.sourceTabs || 0);
+    totals.runs += Number(counts.runs || 0);
+    totals.namedRanges += Number(counts.namedRanges || 0);
+    totals.metricRows += Number(counts.metricRows || (record.metricRows || []).length || 0);
+    addCounts(benefitDomains, record.metrics?.benefit_architecture_metrics?.domain_counts || record.metrics?.benefit_architecture_metrics?.category_counts);
+    addCounts(functions, record.metrics?.formula_implementation_metrics?.function_counts);
+    depths.push(Number(record.metrics?.structural_metrics?.max_dependency_depth || 0));
+    formulaCounts.push(Number(counts.formulas || record.metrics?.structural_metrics?.formula_cell_count || 0));
+    riskScores.push(recordRiskScore(record));
+  }
+
+  const engineCount = engines.length;
+  const complexity = bestRecordBy(engines, recordComplexityScore);
+  const risk = bestRecordBy(engines, recordRiskScore);
+  const spread = pairwiseWarehouseSpread(engines);
+  return {
+    engine_count: engineCount,
+    totals,
+    averages: {
+      cells_per_engine: engineCount ? totals.cells / engineCount : 0,
+      formulas_per_engine: engineCount ? totals.formulas / engineCount : 0,
+      tabs_per_engine: engineCount ? totals.sourceTabs / engineCount : 0
+    },
+    common_benefit_domains: topCountEntries(benefitDomains, 8).map(([name, count]) => ({ name, count })),
+    common_functions: topCountEntries(functions, 8).map(([name, count]) => ({ name, count })),
+    structural_complexity_range: {
+      min_depth: depths.length ? Math.min(...depths) : 0,
+      max_depth: depths.length ? Math.max(...depths) : 0,
+      min_formulas: formulaCounts.length ? Math.min(...formulaCounts) : 0,
+      max_formulas: formulaCounts.length ? Math.max(...formulaCounts) : 0
+    },
+    highest_risk_engine: risk.record ? {
+      id: risk.record.id,
+      name: risk.record.displayName || risk.record.sourceName || risk.record.id,
+      score: risk.score
+    } : null,
+    most_complex_engine: complexity.record ? {
+      id: complexity.record.id,
+      name: complexity.record.displayName || complexity.record.sourceName || complexity.record.id,
+      score: complexity.score
+    } : null,
+    pairwise_spread: spread,
+    risk_score_range: {
+      min: riskScores.length ? Math.min(...riskScores) : 0,
+      max: riskScores.length ? Math.max(...riskScores) : 0
+    }
+  };
+}
+
+function pairLabel(pair){
+  if (!pair) return '-';
+  return `${scorePercent(pair.similarity)} ${pair.engine_a_name} / ${pair.engine_b_name}`;
+}
+
+function renderWarehouseAggregate(records){
+  if (!warehouseAggregateResults) return;
+  warehouseAggregateResults.innerHTML = '';
+  const summary = computeWarehouseAggregate(records || []);
+  const tiles = [
+    ['Engines', summary.engine_count],
+    ['Avg formulas', summary.averages.formulas_per_engine],
+    ['Avg cells', summary.averages.cells_per_engine],
+    ['Depth range', `${summary.structural_complexity_range.min_depth}-${summary.structural_complexity_range.max_depth}`],
+    ['Benefit domains', formatTopCounts(Object.fromEntries(summary.common_benefit_domains.map(item => [item.name, item.count])), 8)],
+    ['Functions', formatTopCounts(Object.fromEntries(summary.common_functions.map(item => [item.name, item.count])), 8)],
+    ['Highest risk', summary.highest_risk_engine ? `${summary.highest_risk_engine.name} (${summary.highest_risk_engine.score})` : '-'],
+    ['Most complex', summary.most_complex_engine ? `${summary.most_complex_engine.name} (${summary.most_complex_engine.score})` : '-'],
+    ['Most similar pair', pairLabel(summary.pairwise_spread.mostSimilar)],
+    ['Most distinct pair', summary.pairwise_spread.mostDistinct ? `${scorePercent(1 - summary.pairwise_spread.mostDistinct.similarity)} dist` : '-']
+  ];
+  for (const [label, value] of tiles) warehouseAggregateResults.appendChild(metricTile(label, value));
+  return summary;
 }
 
 function scorePercent(value){
@@ -1382,6 +1561,7 @@ async function refreshWarehouseList(selectedId=''){
     warehouseSelect.disabled = true;
     if (warehouseLoadButton) warehouseLoadButton.disabled = true;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = true;
+    renderWarehouseAggregate([]);
     renderWarehouseCompareOptions([]);
     updateWarehouseStatus('Warehouse unavailable', 'IndexedDB is not available in this browser.');
     return [];
@@ -1410,6 +1590,7 @@ async function refreshWarehouseList(selectedId=''){
     if (warehouseLoadButton) warehouseLoadButton.disabled = !hasSelection;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = !hasSelection;
     renderWarehouseMetrics(records.find(record => record.id === nextId) || null);
+    renderWarehouseAggregate(records);
     renderWarehouseCompareOptions(records, warehouseCompareA?.value || nextId, warehouseCompareB?.value || '');
     updateWarehouseStatus(
       records.length ? `${records.length} stored engine${records.length === 1 ? '' : 's'}` : 'Browser warehouse',
@@ -1419,6 +1600,7 @@ async function refreshWarehouseList(selectedId=''){
   } catch (error) {
     console.error(error);
     renderWarehouseMetrics(null);
+    renderWarehouseAggregate([]);
     renderWarehouseCompareOptions([]);
     updateWarehouseStatus('Warehouse error', 'Could not read stored engines.');
     return [];
@@ -1481,6 +1663,7 @@ window.engineWarehouse = {
   putSummary: storeSummaryInWarehouse,
   load: loadWarehouseEngine,
   compare: compareWarehouseEngines,
+  aggregate: computeWarehouseAggregate,
   delete: deleteWarehouseEngine,
   getAll: warehouseGetAll,
   get: warehouseGet
