@@ -1040,6 +1040,123 @@ test('warehouse validates, recomputes, and skips records for ranking diagnostics
   assert.ok(payload.checks.diagnostics.some(item => item.id === 'stale-record' && item.status === 'migrated'));
 });
 
+test('warehouse export and import round trip preserves ranking evidence', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function engine(engineName, field, description, formula, functions, refs, namedRanges = ['Plan_Int']) {
+    return {
+      schema_version: 'warehouse-bundle',
+      engine_name: engineName,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: field, description, hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'FINAL_AVERAGE_COMPENSATION', description: 'Final average compensation input', hasFormula: false, runs: { XRD: { field: 'FINAL_AVERAGE_COMPENSATION', iob: 'I' } } },
+            C1: { cell: 'C1', genericField: 'CREDITED_SERVICE', description: 'Credited service input', hasFormula: false, runs: { XRD: { field: 'CREDITED_SERVICE', iob: 'I' } } }
+          },
+          formulas: {
+            A1: { cell: 'A1', formula, refs, functions }
+          }
+        }
+      },
+      namedRanges
+    };
+  }
+  const current = engine(
+    'Bundle Current',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with interest and mortality assumptions',
+    'NPVF2(B1*C1,Plan_Int)',
+    ['NPVF2'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const close = engine(
+    'Bundle Close',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with interest and mortality assumptions',
+    'NPVF2(B1*C1,Plan_Int)',
+    ['NPVF2'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const weak = engine(
+    'Bundle Weak',
+    'QPSA_LUMP_SUM_BENEFIT',
+    'Qualified preretirement survivor lump sum beneficiary benefit',
+    'QPSAPVF(B1*C1,Plan_Int)',
+    ['QPSAPVF'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  try {
+    applyLoadedSummary(${JSON.stringify(current)}, 'bundle-current.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(close)}), 'bundle-close.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(weak)}), 'bundle-weak.json');
+    await engineWarehouse.refresh();
+    const beforeMatches = await engineWarehouse.rankMatchesForCurrent({ limit: 2 });
+    const beforeAggregate = engineWarehouse.aggregate(await engineWarehouse.getAll());
+    const bundle = await engineWarehouse.exportBundle();
+    await engineWarehouse.clear();
+    await engineWarehouse.refresh();
+    const afterClear = await engineWarehouse.getAll();
+    const imported = await engineWarehouse.importBundle(JSON.stringify(bundle));
+    const afterRecords = await engineWarehouse.getAll();
+    const afterMatches = await engineWarehouse.rankMatchesForCurrent({ limit: 2 });
+    const afterAggregate = engineWarehouse.aggregate(afterRecords);
+    result.ok = true;
+    result.checks = {
+      bundleVersion: bundle.bundle_schema_version,
+      bundleMetricVersion: bundle.metric_version,
+      bundleRecordCount: bundle.record_count,
+      afterClearCount: afterClear.length,
+      importedCount: imported.imported_count,
+      skippedCount: imported.skipped_count,
+      afterRecordCount: afterRecords.length,
+      beforeFirst: beforeMatches[0].engine_name,
+      afterFirst: afterMatches[0].engine_name,
+      beforeOverall: beforeMatches[0].overall_similarity,
+      afterOverall: afterMatches[0].overall_similarity,
+      beforeAggregateCount: beforeAggregate.engine_count,
+      afterAggregateCount: afterAggregate.engine_count,
+      importDiagnostics: imported.diagnostics.map(item => item.status)
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-bundle-');
+
+  assert.equal(payload.checks.bundleVersion, 'v1');
+  assert.equal(payload.checks.bundleMetricVersion, 'v0.7');
+  assert.equal(payload.checks.bundleRecordCount, 2);
+  assert.equal(payload.checks.afterClearCount, 0);
+  assert.equal(payload.checks.importedCount, 2);
+  assert.equal(payload.checks.skippedCount, 0);
+  assert.equal(payload.checks.afterRecordCount, 2);
+  assert.equal(payload.checks.beforeFirst, 'bundle-close.json');
+  assert.equal(payload.checks.afterFirst, 'bundle-close.json');
+  assert.equal(payload.checks.beforeOverall, payload.checks.afterOverall);
+  assert.equal(payload.checks.beforeAggregateCount, payload.checks.afterAggregateCount);
+  assert.ok(payload.checks.importDiagnostics.every(status => status === 'current'));
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

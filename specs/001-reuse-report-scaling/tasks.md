@@ -21,11 +21,11 @@
 
 ## Phase 3: Import/Export
 
-- [ ] T011 [US4] Define `WarehouseBundle` JSON shape with bundle schema version, records, timestamps, and validation metadata.
-- [ ] T012 [US4] Implement warehouse export function returning a deterministic JSON bundle.
-- [ ] T013 [US4] Implement warehouse import validation and restore behavior.
+- [x] T011 [US4] Define `WarehouseBundle` JSON shape with bundle schema version, records, timestamps, and validation metadata.
+- [x] T012 [US4] Implement warehouse export function returning a deterministic JSON bundle.
+- [x] T013 [US4] Implement warehouse import validation and restore behavior.
 - [ ] T014 [US4] Add minimal drawer controls for export/import if they fit the existing UI; otherwise expose public browser functions first.
-- [ ] T015 [US4] Add export/import round-trip regression test verifying ranking equivalence before and after restore.
+- [x] T015 [US4] Add export/import round-trip regression test verifying ranking equivalence before and after restore.
 
 ## Phase 4: Scaling and Caching
 

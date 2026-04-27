@@ -1731,6 +1731,81 @@ async function prepareWarehouseRecordsForRanking(records){
   return { records: usable, diagnostics };
 }
 
+function cleanWarehouseRecordForBundle(record){
+  return {
+    id: record.id,
+    sourceName: record.sourceName || '',
+    displayName: record.displayName || record.sourceName || record.id,
+    importedAt: record.importedAt || '',
+    schemaVersion: record.schemaVersion || '',
+    engineName: record.engineName || '',
+    metricVersion: record.metricVersion || record.metrics?.metric_version || '',
+    counts: record.counts || {},
+    summary: record.summary || null,
+    metrics: record.metrics || null,
+    metricRows: record.metricRows || record.metrics?.rows || []
+  };
+}
+
+async function exportWarehouseBundle(){
+  const records = await warehouseGetAll();
+  const prepared = await prepareWarehouseRecordsForRanking(records);
+  const bundleRecords = prepared.records.map(cleanWarehouseRecordForBundle)
+    .sort((a, b) => String(a.displayName || a.id).localeCompare(String(b.displayName || b.id)) || String(a.id).localeCompare(String(b.id)));
+  return {
+    bundle_schema_version: WAREHOUSE_BUNDLE_VERSION,
+    exported_at: new Date().toISOString(),
+    app: 'pbgc-v1-engine-explorer',
+    metric_version: CURRENT_METRIC_VERSION,
+    record_count: bundleRecords.length,
+    records: bundleRecords,
+    diagnostics: prepared.diagnostics
+  };
+}
+
+function normalizeWarehouseBundle(input){
+  const bundle = typeof input === 'string' ? JSON.parse(input) : input;
+  if (!bundle || typeof bundle !== 'object') throw new Error('Warehouse bundle must be an object.');
+  const records = Array.isArray(bundle.records) ? bundle.records : [];
+  return {
+    bundle_schema_version: bundle.bundle_schema_version || '',
+    imported_at: new Date().toISOString(),
+    records
+  };
+}
+
+async function importWarehouseBundle(input, options={}){
+  const bundle = normalizeWarehouseBundle(input);
+  const diagnostics = [];
+  const imported = [];
+  const replaceExisting = options.replaceExisting !== false;
+  const prepared = await prepareWarehouseRecordsForRanking(bundle.records);
+  diagnostics.push(...prepared.diagnostics);
+  for (const record of prepared.records) {
+    const clean = cleanWarehouseRecordForBundle(record);
+    if (!replaceExisting && clean.id && await warehouseGet(clean.id)) {
+      diagnostics.push({
+        record_id: clean.id,
+        record_name: clean.displayName,
+        status: 'skipped',
+        reason: 'duplicate_record',
+        message: 'Record already exists and replaceExisting is false.'
+      });
+      continue;
+    }
+    await warehousePut(clean);
+    imported.push(clean);
+  }
+  await refreshWarehouseList(imported[0]?.id || '');
+  return {
+    bundle_schema_version: bundle.bundle_schema_version,
+    imported_count: imported.length,
+    skipped_count: diagnostics.filter(item => item.status === 'skipped').length,
+    records: imported,
+    diagnostics
+  };
+}
+
 async function rankMatchesForCurrentEngine(options={}){
   const rawRecords = await warehouseGetAll();
   const prepared = await prepareWarehouseRecordsForRanking(rawRecords);
@@ -1759,6 +1834,7 @@ const WAREHOUSE_DB_VERSION = 1;
 const WAREHOUSE_STORE = 'engines';
 const WAREHOUSE_TIMEOUT_MS = 1200;
 const CURRENT_METRIC_VERSION = 'v0.7';
+const WAREHOUSE_BUNDLE_VERSION = 'v1';
 const warehouseMemoryRecords = new Map();
 
 function warehouseAvailable(){
@@ -1846,6 +1922,14 @@ function warehouseDelete(id){
   warehouseMemoryRecords.delete(id);
   return withWarehouseTimeout(
     warehouseRequest({ write: true, run: store => store.delete(id) }),
+    undefined
+  );
+}
+
+function warehouseClear(){
+  warehouseMemoryRecords.clear();
+  return withWarehouseTimeout(
+    warehouseRequest({ write: true, run: store => store.clear() }),
     undefined
   );
 }
@@ -2004,6 +2088,9 @@ window.engineWarehouse = {
   aggregate: computeWarehouseAggregate,
   rankMatchesForCurrent: rankMatchesForCurrentEngine,
   rankMatchesForMetrics: rankWarehouseMatchesForMetrics,
+  exportBundle: exportWarehouseBundle,
+  importBundle: importWarehouseBundle,
+  clear: warehouseClear,
   delete: deleteWarehouseEngine,
   getAll: warehouseGetAll,
   get: warehouseGet
