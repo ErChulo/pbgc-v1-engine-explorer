@@ -728,6 +728,97 @@ test('warehouse ranks stored engines as reuse candidates for current engine', { 
   assert.ok(payload.checks.cards.some(card => card.diff.includes('Top difference')));
 });
 
+test('warehouse match ranking handles empty, self-only, missing metrics, and ties', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function engine(engineName) {
+    return {
+      schema_version: 'warehouse-match-edge',
+      engine_name: engineName,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement benefit', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } }
+          },
+          formulas: {
+            A1: { cell: 'A1', formula: 'ROUND(B1,2)', refs: ['B1'], functions: ['ROUND'] }
+          }
+        }
+      },
+      namedRanges: []
+    };
+  }
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function cards(){
+    return Array.from(document.querySelectorAll('#warehouse-match-results .match-card')).map(card => ({
+      title: card.querySelector('.match-title')?.textContent || '',
+      diff: card.querySelector('.match-diff')?.textContent || ''
+    }));
+  }
+  try {
+    applyLoadedSummary(${JSON.stringify(engine('Current Edge'))}, 'current-edge.json');
+    const emptyMatches = await engineWarehouse.rankMatchesForCurrent();
+    const emptyCards = cards();
+
+    const selfRecord = await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(engine('Self Only'))}), 'self-only.json');
+    await engineWarehouse.load(selfRecord.id);
+    const selfOnlyMatches = await engineWarehouse.rankMatchesForCurrent();
+    const selfOnlyCards = cards();
+
+    const targetMetrics = computeCurrentEngineMetrics();
+    const tieRecords = [
+      { id: 'b-tie', displayName: 'B Tie', metrics: targetMetrics },
+      { id: 'a-tie', displayName: 'A Tie', metrics: targetMetrics },
+      { id: 'missing-metrics', displayName: 'Missing Metrics' }
+    ];
+    const tieMatches = engineWarehouse.rankMatchesForMetrics(targetMetrics, tieRecords, { limit: 5 });
+
+    result.ok = true;
+    result.checks = {
+      emptyCount: emptyMatches.length,
+      emptyCardTitle: emptyCards[0]?.title || '',
+      emptyCardDiff: emptyCards[0]?.diff || '',
+      selfOnlyCount: selfOnlyMatches.length,
+      selfOnlyCardTitle: selfOnlyCards[0]?.title || '',
+      tieNames: tieMatches.map(match => match.engine_name),
+      tieCount: tieMatches.length,
+      skippedMissingMetrics: !tieMatches.some(match => match.engine_name === 'Missing Metrics')
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-match-edge-');
+
+  assert.equal(payload.checks.emptyCount, 0);
+  assert.equal(payload.checks.emptyCardTitle, 'No candidates');
+  assert.match(payload.checks.emptyCardDiff, /Store at least one different engine/);
+  assert.equal(payload.checks.selfOnlyCount, 0);
+  assert.equal(payload.checks.selfOnlyCardTitle, 'No candidates');
+  assert.deepEqual(payload.checks.tieNames, ['A Tie', 'B Tie']);
+  assert.equal(payload.checks.tieCount, 2);
+  assert.equal(payload.checks.skippedMissingMetrics, true);
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {
