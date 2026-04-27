@@ -5,11 +5,11 @@
 
 ## Phase 1: Report Foundation
 
-- [ ] T001 [US1] Define `ReuseCandidateReport` object shape in `index.html` using existing comparison report fields.
-- [ ] T002 [US1] Implement a report generator that wraps `rankWarehouseMatchesForMetrics` results with candidate provenance, family scores, top differences, top similarities, warnings, and missing evidence.
-- [ ] T003 [US1] Add warning rules for low family scores, high operational risk, stale/missing metrics, and high overall similarity masking low benefit architecture similarity.
-- [ ] T004 [US1] Render a compact reuse-candidate report summary in the Warehouse drawer without replacing existing match cards.
-- [ ] T005 [US1] Add browser regression coverage for report object shape, warning rules, and rendered report summary.
+- [x] T001 [US1] Define `ReuseCandidateReport` object shape in `index.html` using existing comparison report fields.
+- [x] T002 [US1] Implement a report generator that wraps `rankWarehouseMatchesForMetrics` results with candidate provenance, family scores, top differences, top similarities, warnings, and missing evidence.
+- [x] T003 [US1] Add warning rules for low family scores, high operational risk, stale/missing metrics, and high overall similarity masking low benefit architecture similarity.
+- [x] T004 [US1] Render a compact reuse-candidate report summary in the Warehouse drawer without replacing existing match cards.
+- [x] T005 [US1] Add browser regression coverage for report object shape, warning rules, and rendered report summary.
 
 ## Phase 2: Warehouse Versioning and Diagnostics
 

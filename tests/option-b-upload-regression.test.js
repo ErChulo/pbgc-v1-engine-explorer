@@ -819,6 +819,121 @@ test('warehouse match ranking handles empty, self-only, missing metrics, and tie
   assert.equal(payload.checks.skippedMissingMetrics, true);
 });
 
+test('warehouse match ranking emits reuse candidate reports with warnings and evidence', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function engine(engineName, field, description, formula, functions, refs, namedRanges = ['Plan_Int']) {
+    return {
+      schema_version: 'warehouse-reuse-report',
+      engine_name: engineName,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: field, description, hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'FINAL_AVERAGE_COMPENSATION', description: 'Final average compensation input', hasFormula: false, runs: { XRD: { field: 'FINAL_AVERAGE_COMPENSATION', iob: 'I' } } },
+            C1: { cell: 'C1', genericField: 'CREDITED_SERVICE', description: 'Credited service input', hasFormula: false, runs: { XRD: { field: 'CREDITED_SERVICE', iob: 'I' } } }
+          },
+          formulas: {
+            A1: { cell: 'A1', formula, refs, functions }
+          }
+        }
+      },
+      namedRanges
+    };
+  }
+  const current = engine(
+    'Current Reuse Report',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with interest and mortality assumptions',
+    'NPVF2(B1*C1,Plan_Int)',
+    ['NPVF2'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const candidate = engine(
+    'Risky Candidate',
+    'QPSA_LUMP_SUM_BENEFIT',
+    'Qualified preretirement survivor lump sum beneficiary benefit',
+    'ROUND(B1*Missing_Name,,)',
+    ['ROUND'],
+    ['B1', 'Missing_Name'],
+    []
+  );
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function cards(){
+    return Array.from(document.querySelectorAll('#warehouse-match-results .match-card')).map(card => ({
+      title: card.querySelector('.match-title')?.textContent || '',
+      diff: card.querySelector('.match-diff')?.textContent || '',
+      evidence: card.querySelector('.match-evidence')?.textContent || '',
+      warning: card.querySelector('.match-warning')?.textContent || ''
+    }));
+  }
+  async function waitFor(predicate, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+  try {
+    applyLoadedSummary(${JSON.stringify(current)}, 'current-report.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(candidate)}), 'risky-candidate.json');
+    await engineWarehouse.refresh();
+    const matches = await engineWarehouse.rankMatchesForCurrent({ limit: 1 });
+    const rendered = await waitFor(() => cards().some(card => card.warning.includes('Review:')));
+    if (!rendered) throw new Error('Reuse report card did not render.');
+    const report = matches[0].reuse_candidate_report;
+    result.ok = true;
+    result.checks = {
+      reportType: report.report_type,
+      metricVersion: report.metric_version,
+      candidateName: report.candidate_name,
+      hasFamilyScores: !!report.family_scores.benefit_architecture,
+      hasTopDifferences: report.top_differences.length > 0,
+      hasTopSimilarities: report.top_similarities.length > 0,
+      warnings: report.warnings,
+      missingEvidenceIsArray: Array.isArray(report.missing_evidence),
+      hasProvenance: !!report.provenance.candidate_counts,
+      card: cards()[0]
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-reuse-report-');
+
+  assert.equal(payload.checks.reportType, 'reuse_candidate_report');
+  assert.equal(payload.checks.metricVersion, 'v0.7');
+  assert.equal(payload.checks.candidateName, 'risky-candidate.json');
+  assert.equal(payload.checks.hasFamilyScores, true);
+  assert.equal(payload.checks.hasTopDifferences, true);
+  assert.equal(payload.checks.hasTopSimilarities, true);
+  assert.ok(payload.checks.warnings.length > 0);
+  assert.equal(payload.checks.missingEvidenceIsArray, true);
+  assert.equal(payload.checks.hasProvenance, true);
+  assert.match(payload.checks.card.diff, /Top difference:/);
+  assert.match(payload.checks.card.evidence, /Strongest similarity:/);
+  assert.match(payload.checks.card.warning, /Review:/);
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

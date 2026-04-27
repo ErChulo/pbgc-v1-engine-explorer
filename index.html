@@ -263,6 +263,8 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .match-card .match-meta{display:flex;flex-wrap:wrap;gap:6px;font-size:10px;color:var(--muted)}
 .match-card .match-meta span{font-variant-numeric:tabular-nums}
 .match-card .match-diff{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.match-card .match-warning{font-size:11px;color:var(--warning);overflow-wrap:anywhere}
+.match-card .match-evidence{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .warehouse-compare{display:grid;gap:8px;padding-top:2px}
 .warehouse-compare-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:center}
 .warehouse-compare-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
@@ -1456,6 +1458,86 @@ function currentEngineWarehouseMetrics(){
   return computeEngineMetrics(DATA, datasetDisplayName(DATA, 'current'));
 }
 
+function componentEvidenceFromReport(report, direction='similar', limit=3){
+  const rows = [];
+  for (const [familyName, family] of Object.entries(report?.family_distances || {})) {
+    for (const component of family.components || []) {
+      rows.push({
+        family: familyName,
+        name: component.name,
+        distance: Number(component.distance || 0),
+        weight: Number(component.weight || 0),
+        impact: Number(component.distance || 0) * Number(component.weight || 0),
+        explanation: component.explanation || ''
+      });
+    }
+  }
+  const sorted = rows.sort((a, b) => {
+    if (direction === 'similar') return a.distance - b.distance || b.weight - a.weight || a.name.localeCompare(b.name);
+    return b.impact - a.impact || b.distance - a.distance || a.name.localeCompare(b.name);
+  });
+  return sorted.slice(0, limit);
+}
+
+function candidateWarnings(report){
+  const warnings = [];
+  const profile = report?.profile_scores || {};
+  const family = report?.family_distances || {};
+  const overall = profile.overall_weighted_similarity?.similarity ?? 0;
+  const benefit = profile.benefit_architecture_similarity?.similarity ?? 0;
+  const formula = profile.formula_similarity?.similarity ?? 0;
+  const risk = profile.risk_complexity_similarity?.similarity ?? 0;
+  const operationalDistance = family.operational_data_quality?.distance ?? 0;
+  if (overall >= 0.75 && benefit < 0.60) warnings.push('Overall similarity masks low benefit architecture similarity.');
+  if (overall >= 0.75 && formula < 0.55) warnings.push('Overall similarity masks formula implementation differences.');
+  if (risk < 0.65 || operationalDistance > 0.35) warnings.push('Operational risk profile differs materially.');
+  if ((report?.missing_metric_report || []).length) warnings.push('Some comparison metrics were missing or ignored.');
+  return warnings;
+}
+
+function reuseCandidateReportFromMatch(match, targetMetrics, record){
+  const report = match.report;
+  const profile = report.profile_scores || {};
+  const family = report.family_distances || {};
+  const topSimilarities = componentEvidenceFromReport(report, 'similar', 3);
+  const topDifferences = (report.top_differences || componentEvidenceFromReport(report, 'different', 3)).slice(0, 5);
+  return {
+    report_type: 'reuse_candidate_report',
+    metric_version: report.metric_version || ENGINE_COMPARISON_CONFIG.metric_version,
+    generated_at: new Date().toISOString(),
+    target_engine_id: targetMetrics?.engine_id || report.engine_a_id,
+    candidate_engine_id: record.id,
+    candidate_name: match.engine_name,
+    candidate_source_name: record.sourceName || '',
+    candidate_imported_at: record.importedAt || '',
+    scores: {
+      overall_similarity: profile.overall_weighted_similarity?.similarity || 0,
+      overall_distance: profile.overall_weighted_similarity?.distance || 0,
+      benefit_architecture_similarity: profile.benefit_architecture_similarity?.similarity || 0,
+      formula_similarity: profile.formula_similarity?.similarity || 0,
+      business_field_similarity: profile.business_field_similarity?.similarity || 0,
+      structural_similarity: profile.structural_similarity?.similarity || 0,
+      risk_complexity_similarity: profile.risk_complexity_similarity?.similarity || 0
+    },
+    family_scores: Object.fromEntries(
+      Object.entries(family).map(([name, value]) => [name, {
+        distance: value.distance,
+        similarity: value.similarity
+      }])
+    ),
+    top_similarities: topSimilarities,
+    top_differences: topDifferences,
+    warnings: candidateWarnings(report),
+    missing_evidence: report.missing_metric_report || [],
+    provenance: {
+      candidate_schema_version: record.schemaVersion || '',
+      candidate_metric_rows: (record.metricRows || []).length,
+      candidate_counts: record.counts || {}
+    },
+    comparison_report: report
+  };
+}
+
 function rankWarehouseMatchesForMetrics(targetMetrics, records, options={}){
   const limit = Number(options.limit || 5);
   const excludeId = options.excludeId || '';
@@ -1466,7 +1548,7 @@ function rankWarehouseMatchesForMetrics(targetMetrics, records, options={}){
     const report = compareMetricWarehouses(targetMetrics, record.metrics);
     const profile = report.profile_scores || {};
     const family = report.family_distances || {};
-    rows.push({
+    const match = {
       engine_id: record.id,
       engine_name: record.displayName || record.sourceName || record.id,
       source_name: record.sourceName || '',
@@ -1478,7 +1560,9 @@ function rankWarehouseMatchesForMetrics(targetMetrics, records, options={}){
       structural_distance: family.structural_graph?.distance || 0,
       top_difference: report.top_differences?.[0] || null,
       report
-    });
+    };
+    match.reuse_candidate_report = reuseCandidateReportFromMatch(match, targetMetrics, record);
+    rows.push(match);
   }
   rows.sort((a, b) => b.overall_similarity - a.overall_similarity || a.overall_distance - b.overall_distance || a.engine_name.localeCompare(b.engine_name));
   return rows.slice(0, limit);
@@ -1522,11 +1606,21 @@ function renderWarehouseMatches(matches){
     }
     const diff = document.createElement('div');
     diff.className = 'match-diff';
-    const top = match.top_difference;
+    const candidateReport = match.reuse_candidate_report;
+    const top = candidateReport?.top_differences?.[0] || match.top_difference;
     diff.textContent = top ? `Top difference: ${top.family} / ${top.name}` : 'Top difference: none';
+    const evidence = document.createElement('div');
+    evidence.className = 'match-evidence';
+    const similar = candidateReport?.top_similarities?.[0];
+    evidence.textContent = similar ? `Strongest similarity: ${similar.family} / ${similar.name}` : 'Strongest similarity: none';
+    const warning = document.createElement('div');
+    warning.className = 'match-warning';
+    warning.textContent = candidateReport?.warnings?.length ? `Review: ${candidateReport.warnings[0]}` : 'Review: no major warning';
     card.appendChild(title);
     card.appendChild(meta);
     card.appendChild(diff);
+    card.appendChild(evidence);
+    card.appendChild(warning);
     warehouseMatchResults.appendChild(card);
   });
 }
@@ -2933,6 +3027,7 @@ window.computeProfileScores = computeProfileScores;
 window.compareMetricWarehouses = compareMetricWarehouses;
 window.compareEngines = compareEngines;
 window.explainTopDifferences = explainTopDifferences;
+window.reuseCandidateReportFromMatch = reuseCandidateReportFromMatch;
 window.computeEngineMetrics = computeEngineMetrics;
 window.flattenEngineMetrics = flattenEngineMetrics;
 window.computeCurrentEngineMetrics = computeCurrentEngineMetrics;
