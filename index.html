@@ -255,6 +255,14 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .warehouse-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .warehouse-aggregate{display:grid;gap:8px;padding-top:2px}
 .warehouse-aggregate-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.warehouse-match{display:grid;gap:8px;padding-top:2px}
+.warehouse-match-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.warehouse-match-results{display:grid;gap:6px}
+.match-card{display:grid;gap:5px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--panel-2) 62%, transparent)}
+.match-card .match-title{font-size:12px;font-weight:750;color:var(--text);overflow-wrap:anywhere}
+.match-card .match-meta{display:flex;flex-wrap:wrap;gap:6px;font-size:10px;color:var(--muted)}
+.match-card .match-meta span{font-variant-numeric:tabular-nums}
+.match-card .match-diff{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .warehouse-compare{display:grid;gap:8px;padding-top:2px}
 .warehouse-compare-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:center}
 .warehouse-compare-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
@@ -279,6 +287,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
   .controls-grid{grid-template-columns:1fr}
   .drawer-utilities{grid-template-columns:1fr auto}
   .warehouse-row{grid-template-columns:1fr}
+  .warehouse-match-row{grid-template-columns:1fr}
   .warehouse-compare-grid{grid-template-columns:1fr}
   .warehouse-metrics{grid-template-columns:1fr}
   .warehouse-aggregate-results{grid-template-columns:1fr}
@@ -628,6 +637,17 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <div class="warehouse-aggregate" aria-label="Warehouse aggregate analysis">
           <label>Aggregate analysis</label>
           <div id="warehouse-aggregate-results" class="warehouse-aggregate-results" aria-live="polite"></div>
+        </div>
+        <div class="warehouse-match" aria-label="Find best warehouse matches for current engine">
+          <label>Best matches for current engine</label>
+          <div class="warehouse-match-row">
+            <div class="warehouse-status">
+              <div id="warehouse-match-name" class="name">No match run</div>
+              <div id="warehouse-match-meta" class="meta">Rank stored engines against the currently loaded engine.</div>
+            </div>
+            <button id="warehouse-match-button" class="mini-button" type="button" disabled>Find Matches</button>
+          </div>
+          <div id="warehouse-match-results" class="warehouse-match-results" aria-live="polite"></div>
         </div>
         <div class="warehouse-compare" aria-label="Compare stored engines">
           <label>Compare engines</label>
@@ -1120,6 +1140,10 @@ const warehouseStatusName = document.getElementById('warehouse-status-name');
 const warehouseStatusMeta = document.getElementById('warehouse-status-meta');
 const warehouseMetrics = document.getElementById('warehouse-metrics');
 const warehouseAggregateResults = document.getElementById('warehouse-aggregate-results');
+const warehouseMatchName = document.getElementById('warehouse-match-name');
+const warehouseMatchMeta = document.getElementById('warehouse-match-meta');
+const warehouseMatchButton = document.getElementById('warehouse-match-button');
+const warehouseMatchResults = document.getElementById('warehouse-match-results');
 const warehouseCompareA = document.getElementById('warehouse-compare-a');
 const warehouseCompareB = document.getElementById('warehouse-compare-b');
 const warehouseCompareButton = document.getElementById('warehouse-compare-button');
@@ -1147,6 +1171,11 @@ function updateUploadStatus(nameText, metaText){
 function updateWarehouseStatus(nameText, metaText){
   if (warehouseStatusName) warehouseStatusName.textContent = nameText;
   if (warehouseStatusMeta) warehouseStatusMeta.textContent = metaText;
+}
+
+function updateWarehouseMatchStatus(nameText, metaText){
+  if (warehouseMatchName) warehouseMatchName.textContent = nameText;
+  if (warehouseMatchMeta) warehouseMatchMeta.textContent = metaText;
 }
 
 function formatMetricValue(value){
@@ -1423,6 +1452,100 @@ function renderWarehouseComparison(report){
   for (const [label, value] of tiles) warehouseCompareResults.appendChild(metricTile(label, value));
 }
 
+function currentEngineWarehouseMetrics(){
+  return computeEngineMetrics(DATA, datasetDisplayName(DATA, 'current'));
+}
+
+function rankWarehouseMatchesForMetrics(targetMetrics, records, options={}){
+  const limit = Number(options.limit || 5);
+  const excludeId = options.excludeId || '';
+  const rows = [];
+  for (const record of records || []) {
+    if (!record?.metrics) continue;
+    if (excludeId && record.id === excludeId) continue;
+    const report = compareMetricWarehouses(targetMetrics, record.metrics);
+    const profile = report.profile_scores || {};
+    const family = report.family_distances || {};
+    rows.push({
+      engine_id: record.id,
+      engine_name: record.displayName || record.sourceName || record.id,
+      source_name: record.sourceName || '',
+      overall_similarity: profile.overall_weighted_similarity?.similarity || 0,
+      overall_distance: profile.overall_weighted_similarity?.distance || 0,
+      benefit_similarity: profile.benefit_architecture_similarity?.similarity || 0,
+      formula_similarity: profile.formula_similarity?.similarity || 0,
+      risk_similarity: profile.risk_complexity_similarity?.similarity || 0,
+      structural_distance: family.structural_graph?.distance || 0,
+      top_difference: report.top_differences?.[0] || null,
+      report
+    });
+  }
+  rows.sort((a, b) => b.overall_similarity - a.overall_similarity || a.overall_distance - b.overall_distance || a.engine_name.localeCompare(b.engine_name));
+  return rows.slice(0, limit);
+}
+
+function renderWarehouseMatches(matches){
+  if (!warehouseMatchResults) return;
+  warehouseMatchResults.innerHTML = '';
+  if (!matches || !matches.length) {
+    const empty = document.createElement('div');
+    empty.className = 'match-card';
+    const title = document.createElement('div');
+    title.className = 'match-title';
+    title.textContent = 'No candidates';
+    const diff = document.createElement('div');
+    diff.className = 'match-diff';
+    diff.textContent = 'Store at least one different engine in the warehouse.';
+    empty.appendChild(title);
+    empty.appendChild(diff);
+    warehouseMatchResults.appendChild(empty);
+    return;
+  }
+  matches.forEach((match, index) => {
+    const card = document.createElement('div');
+    card.className = 'match-card';
+    const title = document.createElement('div');
+    title.className = 'match-title';
+    title.textContent = `${index + 1}. ${match.engine_name}`;
+    const meta = document.createElement('div');
+    meta.className = 'match-meta';
+    const entries = [
+      ['Overall', match.overall_similarity],
+      ['Benefit', match.benefit_similarity],
+      ['Formula', match.formula_similarity],
+      ['Risk', match.risk_similarity]
+    ];
+    for (const [label, value] of entries) {
+      const span = document.createElement('span');
+      span.textContent = `${label} ${scorePercent(value)}`;
+      meta.appendChild(span);
+    }
+    const diff = document.createElement('div');
+    diff.className = 'match-diff';
+    const top = match.top_difference;
+    diff.textContent = top ? `Top difference: ${top.family} / ${top.name}` : 'Top difference: none';
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.appendChild(diff);
+    warehouseMatchResults.appendChild(card);
+  });
+}
+
+async function rankMatchesForCurrentEngine(options={}){
+  const records = await warehouseGetAll();
+  const targetMetrics = currentEngineWarehouseMetrics();
+  const matches = rankWarehouseMatchesForMetrics(targetMetrics, records, {
+    limit: options.limit || 5,
+    excludeId: appState.warehouseEngineId || options.excludeId || ''
+  });
+  renderWarehouseMatches(matches);
+  updateWarehouseMatchStatus(
+    matches.length ? `${matches.length} candidate${matches.length === 1 ? '' : 's'} ranked` : 'No candidates',
+    matches.length ? `Best match: ${matches[0].engine_name} (${scorePercent(matches[0].overall_similarity)})` : 'Store more engines to rank reuse candidates.'
+  );
+  return matches;
+}
+
 const WAREHOUSE_DB_NAME = 'pbgc-v1-engine-explorer';
 const WAREHOUSE_DB_VERSION = 1;
 const WAREHOUSE_STORE = 'engines';
@@ -1561,8 +1684,10 @@ async function refreshWarehouseList(selectedId=''){
     warehouseSelect.disabled = true;
     if (warehouseLoadButton) warehouseLoadButton.disabled = true;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = true;
+    if (warehouseMatchButton) warehouseMatchButton.disabled = true;
     renderWarehouseAggregate([]);
     renderWarehouseCompareOptions([]);
+    renderWarehouseMatches([]);
     updateWarehouseStatus('Warehouse unavailable', 'IndexedDB is not available in this browser.');
     return [];
   }
@@ -1589,6 +1714,7 @@ async function refreshWarehouseList(selectedId=''){
     const hasSelection = !!nextId;
     if (warehouseLoadButton) warehouseLoadButton.disabled = !hasSelection;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = !hasSelection;
+    if (warehouseMatchButton) warehouseMatchButton.disabled = !records.length;
     renderWarehouseMetrics(records.find(record => record.id === nextId) || null);
     renderWarehouseAggregate(records);
     renderWarehouseCompareOptions(records, warehouseCompareA?.value || nextId, warehouseCompareB?.value || '');
@@ -1602,6 +1728,8 @@ async function refreshWarehouseList(selectedId=''){
     renderWarehouseMetrics(null);
     renderWarehouseAggregate([]);
     renderWarehouseCompareOptions([]);
+    renderWarehouseMatches([]);
+    if (warehouseMatchButton) warehouseMatchButton.disabled = true;
     updateWarehouseStatus('Warehouse error', 'Could not read stored engines.');
     return [];
   }
@@ -1611,7 +1739,6 @@ async function storeSummaryInWarehouse(summary, sourceName){
   const record = engineRecordFromSummary(summary, sourceName);
   await warehousePut(record);
   await refreshWarehouseList(record.id);
-  appState.warehouseEngineId = record.id;
   updateWarehouseStatus('Stored in warehouse', warehouseOptionLabel(record));
   return record;
 }
@@ -1664,6 +1791,8 @@ window.engineWarehouse = {
   load: loadWarehouseEngine,
   compare: compareWarehouseEngines,
   aggregate: computeWarehouseAggregate,
+  rankMatchesForCurrent: rankMatchesForCurrentEngine,
+  rankMatchesForMetrics: rankWarehouseMatchesForMetrics,
   delete: deleteWarehouseEngine,
   getAll: warehouseGetAll,
   get: warehouseGet
@@ -3849,6 +3978,18 @@ if (warehouseCompareButton && warehouseCompareA && warehouseCompareB) {
       console.error(error);
       renderWarehouseComparison(null);
       updateWarehouseStatus('Compare failed', 'Choose two stored engines with metrics.');
+    }
+  });
+}
+
+if (warehouseMatchButton) {
+  warehouseMatchButton.addEventListener('click', async () => {
+    try {
+      await rankMatchesForCurrentEngine();
+    } catch (error) {
+      console.error(error);
+      renderWarehouseMatches([]);
+      updateWarehouseMatchStatus('Match failed', 'Could not rank stored engines against the current engine.');
     }
   });
 }

@@ -601,6 +601,133 @@ test('warehouse aggregate analysis summarizes stored V1 engine library', { timeo
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Highest risk' && tile.value.includes('aggregate-risky.json')));
 });
 
+test('warehouse ranks stored engines as reuse candidates for current engine', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function engine(engineName, field, description, formula, functions, refs, namedRanges = ['Plan_Int']) {
+    return {
+      schema_version: 'warehouse-match',
+      engine_name: engineName,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: field, description, hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'FINAL_AVERAGE_COMPENSATION', description: 'Final average compensation input', hasFormula: false, runs: { XRD: { field: 'FINAL_AVERAGE_COMPENSATION', iob: 'I' } } },
+            C1: { cell: 'C1', genericField: 'CREDITED_SERVICE', description: 'Credited service input', hasFormula: false, runs: { XRD: { field: 'CREDITED_SERVICE', iob: 'I' } } }
+          },
+          formulas: {
+            A1: { cell: 'A1', formula, refs, functions }
+          }
+        }
+      },
+      namedRanges
+    };
+  }
+  const current = engine(
+    'Current New Case',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with interest and mortality assumptions',
+    'NPVF2(B1*C1,Plan_Int)',
+    ['NPVF2'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const closeMatch = engine(
+    'Approved Close Match',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with interest and mortality assumptions',
+    'NPVF2(B1*C1,Plan_Int)',
+    ['NPVF2'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const weakMatch = engine(
+    'Approved Weak Match',
+    'QPSA_LUMP_SUM_BENEFIT',
+    'Qualified preretirement survivor lump sum beneficiary benefit',
+    'QPSAPVF(B1*C1,Plan_Int)',
+    ['QPSAPVF'],
+    ['B1', 'C1', 'Plan_Int']
+  );
+  const differentMatch = engine(
+    'Approved Formula Different',
+    'NORMAL_RETIREMENT_BENEFIT',
+    'Normal retirement benefit with unresolved reference',
+    'ROUND(B1*Missing_Name,,)',
+    ['ROUND'],
+    ['B1', 'Missing_Name'],
+    []
+  );
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function cards(){
+    return Array.from(document.querySelectorAll('#warehouse-match-results .match-card')).map(card => ({
+      title: card.querySelector('.match-title')?.textContent || '',
+      meta: card.querySelector('.match-meta')?.textContent || '',
+      diff: card.querySelector('.match-diff')?.textContent || ''
+    }));
+  }
+  async function waitFor(predicate, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+  try {
+    applyLoadedSummary(${JSON.stringify(current)}, 'current-new-case.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(closeMatch)}), 'approved-close-match.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(weakMatch)}), 'approved-weak-match.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(differentMatch)}), 'approved-formula-different.json');
+    await engineWarehouse.refresh();
+    const matches = await engineWarehouse.rankMatchesForCurrent({ limit: 3 });
+    const rendered = await waitFor(() => cards().some(card => card.title.includes('approved-close-match.json')));
+    if (!rendered) throw new Error('Match cards did not render.');
+    result.ok = true;
+    result.checks = {
+      matchCount: matches.length,
+      firstName: matches[0].engine_name,
+      firstOverall: matches[0].overall_similarity,
+      lastOverall: matches[matches.length - 1].overall_similarity,
+      status: document.getElementById('warehouse-match-name').textContent,
+      meta: document.getElementById('warehouse-match-meta').textContent,
+      buttonDisabled: document.getElementById('warehouse-match-button').disabled,
+      cards: cards()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-match-');
+
+  assert.equal(payload.checks.matchCount, 3);
+  assert.equal(payload.checks.firstName, 'approved-close-match.json');
+  assert.ok(payload.checks.firstOverall > 0.99);
+  assert.ok(payload.checks.firstOverall >= payload.checks.lastOverall);
+  assert.equal(payload.checks.status, '3 candidates ranked');
+  assert.match(payload.checks.meta, /Best match: approved-close-match\.json/);
+  assert.equal(payload.checks.buttonDisabled, false);
+  assert.ok(payload.checks.cards[0].title.includes('approved-close-match.json'));
+  assert.ok(payload.checks.cards[0].meta.includes('Overall 100%'));
+  assert.ok(payload.checks.cards.some(card => card.diff.includes('Top difference')));
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {
