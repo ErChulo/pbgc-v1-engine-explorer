@@ -1146,7 +1146,7 @@ test('warehouse aggregate analysis summarizes stored V1 engine library', { timeo
       pairCount: summary.pairwise_spread.pairCount,
       hasMostSimilar: !!summary.pairwise_spread.mostSimilar,
       hasMostDistinct: !!summary.pairwise_spread.mostDistinct,
-      riskInfoTitle: document.querySelector('#warehouse-aggregate-results .info-icon')?.getAttribute('title') || '',
+      riskInfoTitle: document.querySelector('#warehouse-aggregate-results .info-icon')?.dataset.tooltip || '',
       tiles: tiles()
     };
   } catch (error) {
