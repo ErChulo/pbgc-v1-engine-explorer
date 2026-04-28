@@ -1175,6 +1175,7 @@ test('warehouse aggregate analysis summarizes stored V1 engine library', { timeo
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Functions' && tile.value.includes('NPVF2')));
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Highest risk' && tile.value.includes('aggregate-risky.json')));
   assert.match(payload.checks.riskInfoTitle, /unresolved references/);
+  assert.match(payload.checks.riskInfoTitle, /raw attention score/);
 });
 
 test('warehouse ranks stored engines as reuse candidates for current engine', { timeout: 30000 }, t => {
@@ -1302,9 +1303,11 @@ test('warehouse ranks stored engines as reuse candidates for current engine', { 
   assert.match(payload.checks.meta, /Best match: approved-close-match\.json/);
   assert.equal(payload.checks.buttonDisabled, false);
   assert.ok(payload.checks.riskInfoCount >= 3);
-  assert.match(payload.checks.riskInfoTooltip, /unresolved references/);
+  assert.match(payload.checks.riskInfoTooltip, /Quality profile similarity/);
+  assert.match(payload.checks.riskInfoTooltip, /not a percent-risk rating/);
   assert.ok(payload.checks.cards[0].title.includes('approved-close-match.json'));
   assert.ok(payload.checks.cards[0].meta.includes('Overall 100%'));
+  assert.ok(payload.checks.cards[0].meta.includes('Quality profile 100%'));
   assert.ok(payload.checks.cards.some(card => card.diff.includes('Top difference')));
 });
 

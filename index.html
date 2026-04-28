@@ -1230,7 +1230,8 @@ const warehouseCompareA = document.getElementById('warehouse-compare-a');
 const warehouseCompareB = document.getElementById('warehouse-compare-b');
 const warehouseCompareButton = document.getElementById('warehouse-compare-button');
 const warehouseCompareResults = document.getElementById('warehouse-compare-results');
-const RISK_HELP_TEXT = 'Risk is an operational quality score based on unresolved references, parse errors, empty formula arguments, circularity, high-degree hubs, and excessive complexity. Higher means more review attention is needed.';
+const RISK_HELP_TEXT = 'Quality profile similarity compares operational warning patterns such as unresolved references, parse errors, empty formula arguments, circularity, high-degree hubs, and excessive complexity. It is not a percent-risk rating for the engine.';
+const AGGREGATE_RISK_HELP_TEXT = 'Highest review risk is a raw attention score based on unresolved references, parse errors, empty formula arguments, circularity, high-degree hubs, and excessive complexity. Higher means more review attention is needed.';
 
 function datasetDisplayName(data, fallbackName){
   return fallbackName || data.engine_name || data.sheet_name || 'Loaded V1Summary.json';
@@ -1275,14 +1276,14 @@ function formatMetricValue(value){
   return String(value ?? '-');
 }
 
-function createRiskInfoIcon(){
+function createRiskInfoIcon(helpText = RISK_HELP_TEXT){
   const info = document.createElement('span');
   info.className = 'info-icon';
   info.textContent = '';
-  info.dataset.tooltip = RISK_HELP_TEXT;
+  info.dataset.tooltip = helpText;
   info.tabIndex = 0;
   info.setAttribute('role', 'img');
-  info.setAttribute('aria-label', RISK_HELP_TEXT);
+  info.setAttribute('aria-label', helpText);
   return info;
 }
 
@@ -1293,7 +1294,7 @@ function metricTile(label, value){
   labelEl.className = 'metric-label';
   labelEl.textContent = label;
   if (String(label).toLowerCase().includes('risk')) {
-    labelEl.appendChild(createRiskInfoIcon());
+    labelEl.appendChild(createRiskInfoIcon(String(label).toLowerCase().includes('highest') ? AGGREGATE_RISK_HELP_TEXT : RISK_HELP_TEXT));
   }
   const valueEl = document.createElement('div');
   valueEl.className = 'metric-value';
@@ -1569,7 +1570,7 @@ function renderWarehouseComparison(report){
   const summary = document.createElement('div');
   summary.className = 'comparison-overall-summary';
   const similarity = document.createElement('div');
-  similarity.innerHTML = `<div class="summary-label">Overall similarity</div><div class="summary-value">${scorePercent(overall.similarity)}</div><div class="summary-note">Weighted across benefit, formula, field, structure, and risk.</div>`;
+  similarity.innerHTML = `<div class="summary-label">Overall similarity</div><div class="summary-value">${scorePercent(overall.similarity)}</div><div class="summary-note">Weighted across benefit, formula, field, structure, and quality profile.</div>`;
   const distance = document.createElement('div');
   distance.innerHTML = `<div class="summary-label">Overall distance</div><div class="summary-value">${scorePercent(overall.distance)}</div><div class="summary-note">Lower distance means the engines are closer.</div>`;
   summary.appendChild(similarity);
@@ -1579,7 +1580,7 @@ function renderWarehouseComparison(report){
     ['Overall', scorePercent(overall.similarity)],
     ['Formula', scorePercent(profile.formula_similarity?.similarity)],
     ['Benefit', scorePercent(profile.benefit_architecture_similarity?.similarity)],
-    ['Risk', scorePercent(profile.risk_complexity_similarity?.similarity)],
+    ['Quality profile', scorePercent(profile.risk_complexity_similarity?.similarity)],
     ['Structure dist', family.structural_graph?.distance ?? 0],
     ['Top difference', top ? `${top.family}: ${top.name}` : 'None']
   ];
@@ -1763,12 +1764,12 @@ function renderWarehouseMatches(matches){
       ['Overall', match.overall_similarity],
       ['Benefit', match.benefit_similarity],
       ['Formula', match.formula_similarity],
-      ['Risk', match.risk_similarity]
+      ['Quality profile', match.risk_similarity]
     ];
     for (const [label, value] of entries) {
       const span = document.createElement('span');
       span.appendChild(document.createTextNode(`${label} ${scorePercent(value)}`));
-      if (String(label).toLowerCase() === 'risk') span.appendChild(createRiskInfoIcon());
+      if (String(label).toLowerCase() === 'quality profile') span.appendChild(createRiskInfoIcon());
       meta.appendChild(span);
     }
     const diff = document.createElement('div');
