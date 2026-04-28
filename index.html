@@ -318,8 +318,10 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .sort-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:12px;cursor:pointer;user-select:none}
 .sort-chip input{accent-color:var(--accent)}
 .drawer-notes{padding:0;border:0;background:transparent}
-.info-icon{display:inline-grid;place-items:center;width:17px;height:17px;margin-left:5px;border-radius:50%;border:1px solid color-mix(in srgb, var(--accent) 45%, var(--line));color:var(--accent-2);font-size:11px;font-weight:900;cursor:help;background:color-mix(in srgb, var(--accent) 10%, transparent);vertical-align:middle}
+.info-icon{position:relative;display:inline-grid;place-items:center;width:17px;height:17px;margin-left:5px;border-radius:50%;border:1px solid color-mix(in srgb, var(--accent) 45%, var(--line));color:var(--accent-2);font-size:11px;font-weight:900;cursor:help;background:color-mix(in srgb, var(--accent) 10%, transparent);vertical-align:middle;overflow:visible}
 .info-icon::before{content:"i"}
+.info-icon::after{content:attr(data-tooltip);position:absolute;left:50%;bottom:calc(100% + 8px);z-index:260;width:min(280px,70vw);padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);box-shadow:var(--shadow);font:600 11px/1.45 var(--font);letter-spacing:0;text-transform:none;white-space:normal;text-align:left;opacity:0;pointer-events:none;transform:translate(-50%,4px);transition:opacity .12s ease,transform .12s ease}
+.info-icon:hover::after,.info-icon:focus-visible::after{opacity:1;transform:translate(-50%,0)}
 .drawer-notes .note-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;text-transform:uppercase}
 .drawer-notes .note-list{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.5}
 .workspace{grid-template-columns:minmax(0,1.78fr) minmax(320px,.88fr);gap:8px}
@@ -1228,6 +1230,7 @@ const warehouseCompareA = document.getElementById('warehouse-compare-a');
 const warehouseCompareB = document.getElementById('warehouse-compare-b');
 const warehouseCompareButton = document.getElementById('warehouse-compare-button');
 const warehouseCompareResults = document.getElementById('warehouse-compare-results');
+const RISK_HELP_TEXT = 'Risk is an operational quality score based on unresolved references, parse errors, empty formula arguments, circularity, high-degree hubs, and excessive complexity. Higher means more review attention is needed.';
 
 function datasetDisplayName(data, fallbackName){
   return fallbackName || data.engine_name || data.sheet_name || 'Loaded V1Summary.json';
@@ -1272,6 +1275,18 @@ function formatMetricValue(value){
   return String(value ?? '-');
 }
 
+function createRiskInfoIcon(){
+  const info = document.createElement('span');
+  info.className = 'info-icon';
+  info.textContent = '';
+  info.title = RISK_HELP_TEXT;
+  info.dataset.tooltip = RISK_HELP_TEXT;
+  info.tabIndex = 0;
+  info.setAttribute('role', 'img');
+  info.setAttribute('aria-label', RISK_HELP_TEXT);
+  return info;
+}
+
 function metricTile(label, value){
   const tile = document.createElement('div');
   tile.className = 'metric-tile';
@@ -1279,12 +1294,7 @@ function metricTile(label, value){
   labelEl.className = 'metric-label';
   labelEl.textContent = label;
   if (String(label).toLowerCase().includes('risk')) {
-    const info = document.createElement('span');
-    info.className = 'info-icon';
-    info.textContent = '';
-    info.title = 'Risk is an operational quality score based on unresolved references, parse errors, empty formula arguments, circularity, high-degree hubs, and excessive complexity. Higher means more review attention is needed.';
-    info.setAttribute('aria-label', info.title);
-    labelEl.appendChild(info);
+    labelEl.appendChild(createRiskInfoIcon());
   }
   const valueEl = document.createElement('div');
   valueEl.className = 'metric-value';
@@ -1758,7 +1768,8 @@ function renderWarehouseMatches(matches){
     ];
     for (const [label, value] of entries) {
       const span = document.createElement('span');
-      span.textContent = `${label} ${scorePercent(value)}`;
+      span.appendChild(document.createTextNode(`${label} ${scorePercent(value)}`));
+      if (String(label).toLowerCase() === 'risk') span.appendChild(createRiskInfoIcon());
       meta.appendChild(span);
     }
     const diff = document.createElement('div');
@@ -4739,7 +4750,7 @@ if (loadJsonButton && loadJsonInput) {
         }
       }
       if (batch.duplicates.length) {
-        alert(`Duplicate JSON upload cancelled for: ${batch.duplicates.join(', ')}`);
+        window.alert(`Duplicate JSON upload cancelled for: ${batch.duplicates.join(', ')}`);
       }
       if (files.length > 1 || batch.duplicates.length || batch.failed.length) {
         const parts = [`${batch.accepted} imported`];

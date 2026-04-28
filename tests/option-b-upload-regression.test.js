@@ -911,10 +911,12 @@ test('bulk JSON upload imports unique files and blocks duplicate source names', 
       return false;
     }
     const stored = await waitFor(async () => (await engineWarehouse.getAll()).some(record => record.sourceName === 'unique-bulk.json'));
+    const finished = await waitFor(() => document.getElementById('upload-status-name').textContent.trim() === 'Bulk upload complete');
     const records = await engineWarehouse.getAll();
     result.ok = true;
     result.checks = {
       stored,
+      finished,
       duplicateCount: records.filter(record => record.sourceName === 'dup.json').length,
       uniqueCount: records.filter(record => record.sourceName === 'unique-bulk.json').length,
       alerts,
@@ -935,6 +937,7 @@ test('bulk JSON upload imports unique files and blocks duplicate source names', 
   const payload = runBrowserHarness(browser, indexHtml, injection, 'bulk-upload-');
 
   assert.equal(payload.checks.stored, true);
+  assert.equal(payload.checks.finished, true);
   assert.equal(payload.checks.duplicateCount, 1);
   assert.equal(payload.checks.uniqueCount, 1);
   assert.ok(payload.checks.alerts.some(message => message.includes('dup.json')));
@@ -1278,6 +1281,8 @@ test('warehouse ranks stored engines as reuse candidates for current engine', { 
       status: document.getElementById('warehouse-match-name').textContent,
       meta: document.getElementById('warehouse-match-meta').textContent,
       buttonDisabled: document.getElementById('warehouse-match-button').disabled,
+      riskInfoCount: document.querySelectorAll('#warehouse-match-results .info-icon').length,
+      riskInfoTooltip: document.querySelector('#warehouse-match-results .info-icon')?.dataset.tooltip || '',
       cards: cards()
     };
   } catch (error) {
@@ -1299,6 +1304,8 @@ test('warehouse ranks stored engines as reuse candidates for current engine', { 
   assert.equal(payload.checks.status, '3 candidates ranked');
   assert.match(payload.checks.meta, /Best match: approved-close-match\.json/);
   assert.equal(payload.checks.buttonDisabled, false);
+  assert.ok(payload.checks.riskInfoCount >= 3);
+  assert.match(payload.checks.riskInfoTooltip, /unresolved references/);
   assert.ok(payload.checks.cards[0].title.includes('approved-close-match.json'));
   assert.ok(payload.checks.cards[0].meta.includes('Overall 100%'));
   assert.ok(payload.checks.cards.some(card => card.diff.includes('Top difference')));
