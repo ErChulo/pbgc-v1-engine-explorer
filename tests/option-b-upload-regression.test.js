@@ -216,6 +216,183 @@ setTimeout(() => {
   assert.ok(payload.checks.dimmedNodes >= 0);
 });
 
+test('graph selection highlights the selected dependency path', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    window.graphAnimationDebug.setReducedMotionForTest(false);
+    window.graphAnimationDebug.setGsapAvailableForTest(false);
+    renderGraph();
+    const candidate = Array.from(document.querySelectorAll('#graph-svg .node-hit'))
+      .find(node => node.dataset.cell && node.dataset.cell !== appState.rootCell);
+    if (!candidate) throw new Error('No connected non-root node found.');
+    const selectedCell = candidate.dataset.cell;
+    candidate.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const state = window.graphAnimationDebug.getPathHighlightState();
+    const activeEdges = Array.from(document.querySelectorAll('#graph-svg .edge.is-path-active')).map(edge => ({
+      source: edge.dataset.source,
+      target: edge.dataset.target,
+      incoming: edge.classList.contains('is-path-incoming'),
+      outgoing: edge.classList.contains('is-path-outgoing')
+    }));
+    const focusNode = document.querySelector('#graph-svg .node-hit.is-path-focus');
+    const relatedNodes = document.querySelectorAll('#graph-svg .node-hit.is-path-related').length;
+    result.ok = true;
+    result.checks = {
+      selectedCell,
+      inspectCell: appState.inspectCell,
+      focusCell: state && state.focusCell,
+      stateMode: state && state.mode,
+      connectedEdgeCount: state && state.connectedEdgeCount,
+      activeEdgeCount: activeEdges.length,
+      activeEdgesTouchSelection: activeEdges.every(edge => edge.source === selectedCell || edge.target === selectedCell),
+      hasDirectionalClass: activeEdges.some(edge => edge.incoming || edge.outgoing),
+      focusCellClass: focusNode && focusNode.dataset.cell,
+      relatedNodes
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  } finally {
+    try {
+      window.graphAnimationDebug.setReducedMotionForTest(null);
+      window.graphAnimationDebug.setGsapAvailableForTest(null);
+    } catch {}
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 700);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-path-selected-');
+
+  assert.equal(payload.checks.inspectCell, payload.checks.selectedCell);
+  assert.equal(payload.checks.focusCell, payload.checks.selectedCell);
+  assert.ok(['animated', 'static'].includes(payload.checks.stateMode));
+  assert.ok(payload.checks.connectedEdgeCount > 0);
+  assert.equal(payload.checks.activeEdgeCount, payload.checks.connectedEdgeCount);
+  assert.equal(payload.checks.activeEdgesTouchSelection, true);
+  assert.equal(payload.checks.hasDirectionalClass, true);
+  assert.equal(payload.checks.focusCellClass, payload.checks.selectedCell);
+  assert.ok(payload.checks.relatedNodes > 0);
+});
+
+test('graph hover previews dependency path without changing selection', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    renderGraph();
+    const originalInspect = appState.inspectCell;
+    const candidate = Array.from(document.querySelectorAll('#graph-svg .node-hit'))
+      .find(node => node.dataset.cell && node.dataset.cell !== originalInspect);
+    if (!candidate) throw new Error('No hover candidate found.');
+    const hoverCell = candidate.dataset.cell;
+    candidate.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, clientX: 20, clientY: 20 }));
+    const hoverState = window.graphAnimationDebug.getPathHighlightState();
+    const hoverActiveEdges = document.querySelectorAll('#graph-svg .edge.is-path-active').length;
+    candidate.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    const leaveState = window.graphAnimationDebug.getPathHighlightState();
+    result.ok = true;
+    result.checks = {
+      originalInspect,
+      hoverCell,
+      inspectAfterHover: appState.inspectCell,
+      hoverFocus: hoverState && hoverState.focusCell,
+      hoverConnectedEdges: hoverState && hoverState.connectedEdgeCount,
+      hoverActiveEdges,
+      leaveFocus: leaveState && leaveState.focusCell,
+      inspectAfterLeave: appState.inspectCell
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 700);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-path-hover-');
+
+  assert.equal(payload.checks.inspectAfterHover, payload.checks.originalInspect);
+  assert.equal(payload.checks.inspectAfterLeave, payload.checks.originalInspect);
+  assert.equal(payload.checks.hoverFocus, payload.checks.hoverCell);
+  assert.ok(payload.checks.hoverConnectedEdges > 0);
+  assert.equal(payload.checks.hoverActiveEdges, payload.checks.hoverConnectedEdges);
+  assert.equal(payload.checks.leaveFocus, payload.checks.originalInspect);
+});
+
+test('graph path highlight is static under reduced motion', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    window.graphAnimationDebug.setReducedMotionForTest(true);
+    renderGraph();
+    window.graphAnimationDebug.clearActiveAnimations();
+    const candidate = Array.from(document.querySelectorAll('#graph-svg .node-hit'))
+      .find(node => node.dataset.cell && node.dataset.cell !== appState.rootCell);
+    if (!candidate) throw new Error('No reduced-motion candidate found.');
+    candidate.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const state = window.graphAnimationDebug.getPathHighlightState();
+    const running = document.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running').length;
+    result.ok = true;
+    result.checks = {
+      policyMode: window.graphAnimationDebug.getPolicy().mode,
+      stateMode: state && state.mode,
+      connectedEdgeCount: state && state.connectedEdgeCount,
+      activeEdgeCount: document.querySelectorAll('#graph-svg .edge.is-path-active').length,
+      runningAnimations: running
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  } finally {
+    try { window.graphAnimationDebug.setReducedMotionForTest(null); } catch {}
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 700);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-path-reduced-');
+
+  assert.equal(payload.checks.policyMode, 'disabled');
+  assert.equal(payload.checks.stateMode, 'static');
+  assert.ok(payload.checks.connectedEdgeCount > 0);
+  assert.equal(payload.checks.activeEdgeCount, payload.checks.connectedEdgeCount);
+  assert.equal(payload.checks.runningAnimations, 0);
+});
+
 test('graph animation policy respects reduced motion and large graphs', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

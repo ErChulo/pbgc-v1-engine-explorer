@@ -212,6 +212,11 @@ pre.formula-root{margin:0;padding:10px 12px;border:1px solid var(--line-soft);bo
 .node-hit.is-selected .node-box{stroke:var(--node-inspect-stroke);stroke-width:3}
 .node-hit.is-hovered .node-box{filter:url(#glow);stroke-width:3}
 .edge.is-adjacent{opacity:.96;stroke-width:1.8}
+.node-hit.is-path-focus .node-box{stroke:var(--node-inspect-stroke);stroke-width:3.4;filter:url(#glow)}
+.node-hit.is-path-related .node-box{stroke-width:2.8}
+.edge.is-path-active{opacity:1;stroke:var(--accent);stroke-width:2.5}
+.edge.is-path-incoming{stroke:var(--node-input-stroke)}
+.edge.is-path-outgoing{stroke:var(--node-output-stroke)}
 @media (prefers-reduced-motion: reduce){
   .node-hit,.edge,.graph-tooltip{transition:none!important}
 }
@@ -1123,7 +1128,9 @@ const appState = {
   graphHoverCell: null,
   graphAnimation: {
     active: [],
+    pathActive: [],
     lastPolicy: null,
+    lastPathHighlight: null,
     reducedMotionOverride: null,
     gsapAvailableOverride: null
   },
@@ -3667,6 +3674,18 @@ function clearGraphAnimations(){
     } catch {}
   }
   appState.graphAnimation.active = [];
+  clearPathTraceAnimations();
+}
+
+function clearPathTraceAnimations(){
+  const active = appState.graphAnimation.pathActive || [];
+  for (const animation of active) {
+    try {
+      if (animation && typeof animation.kill === 'function') animation.kill();
+      else if (animation && typeof animation.cancel === 'function') animation.cancel();
+    } catch {}
+  }
+  appState.graphAnimation.pathActive = [];
 }
 
 function animateGraphElements(elements, policy, options={}){
@@ -3746,11 +3765,89 @@ function graphRelatedCells(layout, focusCell){
   return related;
 }
 
+function graphPathHighlightState(layout, focusCell){
+  const connectedNodes = new Set();
+  const connectedEdges = new Set();
+  const incomingEdges = new Set();
+  const outgoingEdges = new Set();
+  if (!layout?.nodeById || !focusCell || !layout.nodeById[focusCell]) {
+    return { focusCell: '', selectedCell: appState.inspectCell || '', hoveredCell: appState.graphHoverCell || '', connectedNodes, connectedEdges, incomingEdges, outgoingEdges, mode: 'none' };
+  }
+  connectedNodes.add(focusCell);
+  for (const edge of layout.edges || []) {
+    const edgeId = `${edge.source}->${edge.target}`;
+    if (edge.source === focusCell) {
+      connectedNodes.add(edge.target);
+      connectedEdges.add(edgeId);
+      outgoingEdges.add(edgeId);
+    } else if (edge.target === focusCell) {
+      connectedNodes.add(edge.source);
+      connectedEdges.add(edgeId);
+      incomingEdges.add(edgeId);
+    }
+  }
+  const policy = appState.graphAnimation.lastPolicy || graphAnimationPolicy(layout);
+  const mode = policy.enabled && policy.mode === 'full' && connectedEdges.size ? 'animated' : (connectedEdges.size ? 'static' : 'none');
+  return {
+    focusCell,
+    selectedCell: appState.inspectCell || '',
+    hoveredCell: appState.graphHoverCell || '',
+    connectedNodes,
+    connectedEdges,
+    incomingEdges,
+    outgoingEdges,
+    mode
+  };
+}
+
+function animatePathTrace(edges, state){
+  clearPathTraceAnimations();
+  if (!edges.length || state.mode !== 'animated') return;
+  for (const edge of edges) {
+    let length = 120;
+    try { length = Math.max(1, edge.getTotalLength()); } catch {}
+    edge.style.strokeDasharray = String(length);
+    edge.style.strokeDashoffset = String(length);
+    if (window.gsap?.to && graphAnimationLibrary() === 'gsap') {
+      const tween = window.gsap.to(edge, {
+        strokeDashoffset: 0,
+        duration: 0.42,
+        ease: 'power1.out',
+        onComplete(){
+          edge.style.strokeDasharray = '';
+          edge.style.strokeDashoffset = '';
+          appState.graphAnimation.pathActive = appState.graphAnimation.pathActive.filter(item => item !== tween);
+        }
+      });
+      appState.graphAnimation.pathActive.push(tween);
+    } else if (edge.animate) {
+      const animation = edge.animate(
+        [{ strokeDashoffset: length }, { strokeDashoffset: 0 }],
+        { duration: 420, easing: 'ease-out', fill: 'both' }
+      );
+      appState.graphAnimation.pathActive.push(animation);
+      const cleanup = () => {
+        try { animation.cancel(); } catch {}
+        edge.style.strokeDasharray = '';
+        edge.style.strokeDashoffset = '';
+        appState.graphAnimation.pathActive = appState.graphAnimation.pathActive.filter(item => item !== animation);
+      };
+      if (animation.finished?.then) animation.finished.then(cleanup).catch(() => {});
+      setTimeout(cleanup, 500);
+    } else {
+      edge.style.strokeDasharray = '';
+      edge.style.strokeDashoffset = '';
+    }
+  }
+}
+
 function applyGraphElementStates(){
   if (!appState.graph?.world || !appState.graph?.layout) return;
   const focusCell = appState.graphHoverCell || appState.inspectCell || appState.rootCell;
   const related = graphRelatedCells(appState.graph.layout, focusCell);
   const hasFocus = !!focusCell && related.size > 0;
+  const pathState = graphPathHighlightState(appState.graph.layout, focusCell);
+  const activePathEdges = [];
   for (const node of appState.graph.world.querySelectorAll('.node-hit')) {
     const cell = node.dataset.cell;
     const isRoot = cell === appState.rootCell;
@@ -3762,14 +3859,33 @@ function applyGraphElementStates(){
     node.classList.toggle('is-hovered', isHovered);
     node.classList.toggle('is-adjacent', isAdjacent);
     node.classList.toggle('is-dimmed', hasFocus && !related.has(cell));
+    node.classList.toggle('is-path-focus', cell === pathState.focusCell);
+    node.classList.toggle('is-path-related', pathState.connectedNodes.has(cell) && cell !== pathState.focusCell);
   }
   for (const edge of appState.graph.world.querySelectorAll('.edge')) {
     const source = edge.dataset.source;
     const target = edge.dataset.target;
+    const edgeId = edge.dataset.edgeId || `${source}->${target}`;
     const isAdjacent = hasFocus && (source === focusCell || target === focusCell);
+    const isPathActive = pathState.connectedEdges.has(edgeId);
     edge.classList.toggle('is-adjacent', isAdjacent);
     edge.classList.toggle('is-dimmed', hasFocus && !isAdjacent);
+    edge.classList.toggle('is-path-active', isPathActive);
+    edge.classList.toggle('is-path-incoming', pathState.incomingEdges.has(edgeId));
+    edge.classList.toggle('is-path-outgoing', pathState.outgoingEdges.has(edgeId));
+    if (isPathActive) activePathEdges.push(edge);
   }
+  appState.graphAnimation.lastPathHighlight = {
+    focusCell: pathState.focusCell,
+    selectedCell: pathState.selectedCell,
+    hoveredCell: pathState.hoveredCell,
+    connectedNodeCount: pathState.connectedNodes.size,
+    connectedEdgeCount: pathState.connectedEdges.size,
+    incomingEdgeCount: pathState.incomingEdges.size,
+    outgoingEdgeCount: pathState.outgoingEdges.size,
+    mode: pathState.mode
+  };
+  animatePathTrace(activePathEdges, pathState);
 }
 
 window.graphAnimationDebug = {
@@ -3783,6 +3899,10 @@ window.graphAnimationDebug = {
     appState.graphAnimation.gsapAvailableOverride = value === null ? null : !!value;
   },
   clearActiveAnimations: clearGraphAnimations
+  ,
+  getPathHighlightState(){
+    return appState.graphAnimation.lastPathHighlight;
+  }
 };
 
 function edgePath(source, target){
