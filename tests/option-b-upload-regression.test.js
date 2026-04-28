@@ -98,6 +98,195 @@ setTimeout(() => {
   assert.ok(payload.checks.graphNodes.length > 1, 'graph should expand beyond selected root');
 });
 
+test('graph animation metadata keeps edges attached to rendered nodes', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    window.graphAnimationDebug.clearActiveAnimations();
+    const nodes = new Set(Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(node => node.dataset.cell));
+    const edges = Array.from(document.querySelectorAll('#graph-svg .edge')).map(edge => ({
+      source: edge.dataset.source,
+      target: edge.dataset.target,
+      d: edge.getAttribute('d') || '',
+      adjacent: edge.classList.contains('is-adjacent'),
+      dimmed: edge.classList.contains('is-dimmed')
+    }));
+    const policy = window.graphAnimationDebug.getPolicy();
+    result.ok = true;
+    result.checks = {
+      nodeCount: nodes.size,
+      edgeCount: edges.length,
+      policyMode: policy && policy.mode,
+      policyLibrary: policy && policy.library,
+      allEdgesHaveEndpoints: edges.every(edge => nodes.has(edge.source) && nodes.has(edge.target)),
+      allEdgesHavePaths: edges.every(edge => /^M\\s/.test(edge.d) && edge.d.includes(' C ')),
+      anyEdgeHasMetadata: edges.some(edge => edge.source && edge.target)
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 500);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-animation-metadata-');
+
+  assert.ok(payload.checks.nodeCount > 1);
+  assert.ok(payload.checks.edgeCount > 0);
+  assert.ok(['full', 'simple', 'disabled'].includes(payload.checks.policyMode));
+  assert.ok(['gsap', 'web-animations', 'none'].includes(payload.checks.policyLibrary));
+  assert.equal(payload.checks.allEdgesHaveEndpoints, true);
+  assert.equal(payload.checks.allEdgesHavePaths, true);
+  assert.equal(payload.checks.anyEdgeHasMetadata, true);
+});
+
+test('graph selection marks selected and adjacent dependency elements', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    const candidate = Array.from(document.querySelectorAll('#graph-svg .node-hit'))
+      .find(node => node.dataset.cell && node.dataset.cell !== appState.rootCell);
+    if (!candidate) throw new Error('No non-root graph node found.');
+    const selectedCell = candidate.dataset.cell;
+    candidate.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    window.graphAnimationDebug.clearActiveAnimations();
+    const selectedNode = document.querySelector('#graph-svg .node-hit[data-cell="' + CSS.escape(selectedCell) + '"]');
+    const adjacentEdges = Array.from(document.querySelectorAll('#graph-svg .edge.is-adjacent')).map(edge => ({
+      source: edge.dataset.source,
+      target: edge.dataset.target
+    }));
+    const dimmedNodes = document.querySelectorAll('#graph-svg .node-hit.is-dimmed').length;
+    result.ok = true;
+    result.checks = {
+      selectedCell,
+      inspectCell: appState.inspectCell,
+      selectedHasClass: selectedNode && selectedNode.classList.contains('is-selected'),
+      adjacentEdgeCount: adjacentEdges.length,
+      adjacentEdgesTouchSelection: adjacentEdges.every(edge => edge.source === selectedCell || edge.target === selectedCell),
+      dimmedNodes
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 700);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-selection-states-');
+
+  assert.equal(payload.checks.inspectCell, payload.checks.selectedCell);
+  assert.equal(payload.checks.selectedHasClass, true);
+  assert.ok(payload.checks.adjacentEdgeCount > 0);
+  assert.equal(payload.checks.adjacentEdgesTouchSelection, true);
+  assert.ok(payload.checks.dimmedNodes >= 0);
+});
+
+test('graph animation policy respects reduced motion and large graphs', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    window.graphAnimationDebug.setReducedMotionForTest(true);
+    renderGraph();
+    const reducedPolicy = window.graphAnimationDebug.getPolicy();
+    window.graphAnimationDebug.setReducedMotionForTest(false);
+
+    const summary = {
+      schema_version: 'graph-animation-large',
+      engine_name: 'Graph Animation Large',
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: { Separated: { runs: ['XRD'], cells: {}, formulas: {} } },
+      namedRanges: []
+    };
+    const cells = summary.worksheets.Separated.cells;
+    const formulas = summary.worksheets.Separated.formulas;
+    cells.A1 = { cell: 'A1', genericField: 'ROOT_OUTPUT', description: 'Root output', hasFormula: true, runs: { XRD: { field: 'ROOT_OUTPUT', iob: 'O' } } };
+    const rootRefs = [];
+    for (let i = 1; i <= 75; i++) {
+      const row = i + 1;
+      const formulaCell = 'F' + row;
+      const inputA = 'A' + row;
+      const inputB = 'B' + row;
+      rootRefs.push(formulaCell);
+      cells[formulaCell] = { cell: formulaCell, genericField: 'FORMULA_' + i, description: 'Intermediate formula ' + i, hasFormula: true, runs: { XRD: { field: 'FORMULA_' + i, iob: 'M' } } };
+      cells[inputA] = { cell: inputA, genericField: 'INPUT_' + i + '_A', description: 'Input A ' + i, hasFormula: false, runs: { XRD: { field: 'INPUT_' + i + '_A', iob: 'I' } } };
+      cells[inputB] = { cell: inputB, genericField: 'INPUT_' + i + '_B', description: 'Input B ' + i, hasFormula: false, runs: { XRD: { field: 'INPUT_' + i + '_B', iob: 'I' } } };
+      formulas[formulaCell] = { cell: formulaCell, formula: inputA + '+' + inputB, refs: [inputA, inputB], functions: [] };
+    }
+    formulas.A1 = { cell: 'A1', formula: rootRefs.join('+'), refs: rootRefs, functions: [] };
+    applyLoadedSummary(summary, 'graph-animation-large.json');
+    window.eval("appState.rootCell = 'A1'; appState.inspectCell = 'A1'; appState.backwardDepth = 2; appState.forwardDepth = 0; renderGraph();");
+    const largePolicy = window.graphAnimationDebug.getPolicy();
+    const largeNodeCount = document.querySelectorAll('#graph-svg .node-hit').length;
+    const largeEdgeCount = document.querySelectorAll('#graph-svg .edge').length;
+    result.ok = true;
+    result.checks = {
+      reducedMode: reducedPolicy && reducedPolicy.mode,
+      reducedReason: reducedPolicy && reducedPolicy.reason,
+      largeMode: largePolicy && largePolicy.mode,
+      largeReason: largePolicy && largePolicy.reason,
+      largePolicyNodes: largePolicy && largePolicy.nodeCount,
+      largePolicyEdges: largePolicy && largePolicy.edgeCount,
+      largeNodeCount,
+      largeEdgeCount
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  } finally {
+    try { window.graphAnimationDebug.setReducedMotionForTest(null); } catch {}
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 700);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-animation-policy-');
+
+  assert.equal(payload.checks.reducedMode, 'disabled');
+  assert.equal(payload.checks.reducedReason, 'reduced_motion');
+  assert.ok(['simple', 'disabled'].includes(payload.checks.largeMode));
+  assert.ok(['graph_simplified', 'graph_too_large'].includes(payload.checks.largeReason));
+  assert.ok(payload.checks.largePolicyNodes >= 100);
+  assert.ok(payload.checks.largePolicyEdges >= 150);
+  assert.equal(payload.checks.largeNodeCount, payload.checks.largePolicyNodes);
+  assert.equal(payload.checks.largeEdgeCount, payload.checks.largePolicyEdges);
+});
+
 test('Option B JSON upload scopes source tab/run and keeps tree toggle local', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

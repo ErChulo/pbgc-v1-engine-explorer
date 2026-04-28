@@ -36,6 +36,12 @@ The browser API exposes:
 
 Bundles include schema metadata, metric version metadata, stored summaries, metric rows, counts, and diagnostics. Import validates records and recomputes stale or missing metrics when a usable summary is present.
 
+Duplicate bundle record ids replace existing warehouse records by default. Callers that pass `replaceExisting: false` skip duplicate records and receive `duplicate_record` diagnostics.
+
+## Graph UX Behavior
+
+The graph animation layer is an enhancement. Node and edge geometry is rendered first, then motion is applied only when the browser and graph size make it safe. Reduced-motion preference, missing animation support, or large dense graphs fall back to simplified or instant rendering.
+
 ## Known Boundary
 
 R5 Summary Builder output and entitlement state-machine logic are not integrated in this feature.

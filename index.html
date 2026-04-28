@@ -205,6 +205,16 @@ pre.formula-root{margin:0;padding:10px 12px;border:1px solid var(--line-soft);bo
 .node-field{font-size:14px;font-weight:700;fill:var(--node-field-text)}
 .node-tab,.node-cell{font-size:11px;fill:var(--node-cell-text)}
 .edge{fill:none;stroke:var(--muted);stroke-width:1.15;opacity:.82;vector-effect:non-scaling-stroke}.edge.to-formula,.edge.to-output{stroke:var(--node-output-stroke)}.edge.to-input{stroke:var(--node-input-stroke);opacity:.78}.edge.to-named{stroke:var(--node-named-stroke);opacity:.82}
+.node-hit,.edge{will-change:opacity,transform}
+.node-hit.is-dimmed{opacity:.38}
+.edge.is-dimmed{opacity:.2}
+.node-hit.is-adjacent .node-box{stroke-width:2.8}
+.node-hit.is-selected .node-box{stroke:var(--node-inspect-stroke);stroke-width:3}
+.node-hit.is-hovered .node-box{filter:url(#glow);stroke-width:3}
+.edge.is-adjacent{opacity:.96;stroke-width:1.8}
+@media (prefers-reduced-motion: reduce){
+  .node-hit,.edge,.graph-tooltip{transition:none!important}
+}
 .legend-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
 .legend-ring{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--node-selected-stroke);margin-right:6px;vertical-align:-1px}
 @media (max-width: 1180px){.topbar{grid-template-columns:1fr}.utility-panel{grid-template-columns:auto 1fr;grid-template-areas:"logo title" "range mode";align-items:center}.brand-mark{grid-area:logo}.brand-title{grid-area:title}.compact-range{grid-area:range;justify-items:start}.theme-wrap{grid-area:mode;justify-self:end}.controls-grid{grid-template-columns:1fr repeat(3,minmax(92px,110px))}.workspace{grid-template-columns:1fr;grid-template-rows:minmax(360px,1.05fr) minmax(280px,.95fr)}}
@@ -1110,6 +1120,13 @@ const appState = {
   theme: document.documentElement.dataset.theme || 'dark',
   graph: null,
   graphView: null,
+  graphHoverCell: null,
+  graphAnimation: {
+    active: [],
+    lastPolicy: null,
+    reducedMotionOverride: null,
+    gsapAvailableOverride: null
+  },
   warehouseEngineId: '',
   dataVersion: 0
 };
@@ -3583,6 +3600,176 @@ function resetGraphView(){
   applyGraphTransform();
 }
 
+const GRAPH_ANIMATION_LIMITS = {
+  maxFullNodes: 80,
+  maxFullEdges: 120,
+  maxSimpleNodes: 140,
+  maxSimpleEdges: 220,
+  fullDurationMs: 220,
+  simpleDurationMs: 120
+};
+
+function graphReducedMotionRequested(){
+  if (appState.graphAnimation.reducedMotionOverride !== null) {
+    return !!appState.graphAnimation.reducedMotionOverride;
+  }
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function graphAnimationLibrary(){
+  if (appState.graphAnimation.gsapAvailableOverride === false) {
+    return typeof Element !== 'undefined' && Element.prototype.animate ? 'web-animations' : 'none';
+  }
+  if (window.gsap && typeof window.gsap.fromTo === 'function') return 'gsap';
+  return typeof Element !== 'undefined' && Element.prototype.animate ? 'web-animations' : 'none';
+}
+
+function graphAnimationPolicy(layout){
+  const nodeCount = layout?.nodes?.length || 0;
+  const edgeCount = layout?.edges?.length || 0;
+  const reducedMotion = graphReducedMotionRequested();
+  const library = graphAnimationLibrary();
+  let mode = 'full';
+  let reason = '';
+  if (reducedMotion) {
+    mode = 'disabled';
+    reason = 'reduced_motion';
+  } else if (nodeCount > GRAPH_ANIMATION_LIMITS.maxSimpleNodes || edgeCount > GRAPH_ANIMATION_LIMITS.maxSimpleEdges) {
+    mode = 'disabled';
+    reason = 'graph_too_large';
+  } else if (nodeCount > GRAPH_ANIMATION_LIMITS.maxFullNodes || edgeCount > GRAPH_ANIMATION_LIMITS.maxFullEdges) {
+    mode = 'simple';
+    reason = 'graph_simplified';
+  } else if (library === 'none') {
+    mode = 'disabled';
+    reason = 'no_animation_library';
+  }
+  return {
+    enabled: mode !== 'disabled',
+    library,
+    reducedMotion,
+    nodeCount,
+    edgeCount,
+    maxAnimatedNodes: GRAPH_ANIMATION_LIMITS.maxFullNodes,
+    maxAnimatedEdges: GRAPH_ANIMATION_LIMITS.maxFullEdges,
+    mode,
+    reason
+  };
+}
+
+function clearGraphAnimations(){
+  const active = appState.graphAnimation.active || [];
+  for (const animation of active) {
+    try {
+      if (animation && typeof animation.kill === 'function') animation.kill();
+      else if (animation && typeof animation.cancel === 'function') animation.cancel();
+    } catch {}
+  }
+  appState.graphAnimation.active = [];
+}
+
+function animateGraphElements(elements, policy, options={}){
+  const targets = Array.from(elements || []).filter(Boolean);
+  if (!targets.length || !policy.enabled) {
+    for (const el of targets) {
+      el.style.opacity = '';
+      el.style.transform = '';
+    }
+    return;
+  }
+  const duration = (policy.mode === 'simple' ? GRAPH_ANIMATION_LIMITS.simpleDurationMs : GRAPH_ANIMATION_LIMITS.fullDurationMs) / 1000;
+  if (policy.library === 'gsap' && window.gsap?.fromTo) {
+    const tween = window.gsap.fromTo(
+      targets,
+      { opacity: 0 },
+      { opacity: options.opacity ?? 1, duration, ease: 'power1.out', stagger: policy.mode === 'full' ? 0.006 : 0 }
+    );
+    appState.graphAnimation.active.push(tween);
+    return;
+  }
+  if (policy.library === 'web-animations' && targets[0]?.animate) {
+    for (const el of targets) {
+      el.style.opacity = String(options.opacity ?? 1);
+      const animation = el.animate(
+        [{ opacity: 0 }, { opacity: options.opacity ?? 1 }],
+        { duration: duration * 1000, easing: 'ease-out', fill: 'both' }
+      );
+      appState.graphAnimation.active.push(animation);
+    }
+    return;
+  }
+  for (const el of targets) {
+    el.style.opacity = '';
+    el.style.transform = '';
+  }
+}
+
+function runGraphEntryAnimation(layout, world){
+  clearGraphAnimations();
+  const policy = graphAnimationPolicy(layout);
+  appState.graphAnimation.lastPolicy = policy;
+  if (!policy.enabled || !world) return policy;
+  const nodes = world.querySelectorAll('.node-hit');
+  const edges = world.querySelectorAll('.edge');
+  animateGraphElements(edges, policy, { opacity: 0.82 });
+  animateGraphElements(nodes, policy, { opacity: 1 });
+  return policy;
+}
+
+function graphRelatedCells(layout, focusCell){
+  const related = new Set();
+  if (!layout?.nodeById || !focusCell || !layout.nodeById[focusCell]) return related;
+  related.add(focusCell);
+  for (const edge of layout.edges || []) {
+    if (edge.source === focusCell) {
+      related.add(edge.target);
+    } else if (edge.target === focusCell) {
+      related.add(edge.source);
+    }
+  }
+  return related;
+}
+
+function applyGraphElementStates(){
+  if (!appState.graph?.world || !appState.graph?.layout) return;
+  const focusCell = appState.graphHoverCell || appState.inspectCell || appState.rootCell;
+  const related = graphRelatedCells(appState.graph.layout, focusCell);
+  const hasFocus = !!focusCell && related.size > 0;
+  for (const node of appState.graph.world.querySelectorAll('.node-hit')) {
+    const cell = node.dataset.cell;
+    const isRoot = cell === appState.rootCell;
+    const isSelected = cell === appState.inspectCell;
+    const isHovered = cell === appState.graphHoverCell;
+    const isAdjacent = hasFocus && related.has(cell) && cell !== focusCell;
+    node.classList.toggle('is-root', isRoot);
+    node.classList.toggle('is-selected', isSelected);
+    node.classList.toggle('is-hovered', isHovered);
+    node.classList.toggle('is-adjacent', isAdjacent);
+    node.classList.toggle('is-dimmed', hasFocus && !related.has(cell));
+  }
+  for (const edge of appState.graph.world.querySelectorAll('.edge')) {
+    const source = edge.dataset.source;
+    const target = edge.dataset.target;
+    const isAdjacent = hasFocus && (source === focusCell || target === focusCell);
+    edge.classList.toggle('is-adjacent', isAdjacent);
+    edge.classList.toggle('is-dimmed', hasFocus && !isAdjacent);
+  }
+}
+
+window.graphAnimationDebug = {
+  getPolicy(){
+    return appState.graphAnimation.lastPolicy;
+  },
+  setReducedMotionForTest(value){
+    appState.graphAnimation.reducedMotionOverride = value === null ? null : !!value;
+  },
+  setGsapAvailableForTest(value){
+    appState.graphAnimation.gsapAvailableOverride = value === null ? null : !!value;
+  },
+  clearActiveAnimations: clearGraphAnimations
+};
+
 function edgePath(source, target){
   const sx = source.x + source.w / 2;
   const sy = source.y;
@@ -3629,14 +3816,23 @@ function hideGraphTooltip(){
 
 function renderGraph(){
   const root = appState.rootCell;
+  clearGraphAnimations();
   if (!root) {
     graphSvg.innerHTML = '';
     appState.graph = null;
     appState.graphView = null;
+    appState.graphHoverCell = null;
+    appState.graphAnimation.lastPolicy = graphAnimationPolicy({ nodes: [], edges: [] });
     hideGraphTooltip();
     return;
   }
   const layout = buildBidirectionalGraph(root, appState.backwardDepth, appState.forwardDepth);
+  if (!appState.inspectCell || !layout.nodeById[appState.inspectCell]) {
+    appState.inspectCell = root;
+  }
+  if (appState.graphHoverCell && !layout.nodeById[appState.graphHoverCell]) {
+    appState.graphHoverCell = null;
+  }
   graphSvg.innerHTML = '';
   hideGraphTooltip();
   ensureDefs();
@@ -3655,6 +3851,9 @@ function renderGraph(){
       class: `edge ${edgeClass}`,
       'marker-end':'url(#arrowSmall)'
     });
+    path.dataset.source = e.source;
+    path.dataset.target = e.target;
+    path.dataset.edgeId = `${e.source}->${e.target}`;
     edgeLayer.appendChild(path);
   }
   world.appendChild(edgeLayer);
@@ -3704,9 +3903,17 @@ function renderGraph(){
       g.appendChild(t3);
     }
 
-    g.addEventListener('mouseenter', function(ev){ showGraphTooltip(ev, tooltipText); });
+    g.addEventListener('mouseenter', function(ev){
+      appState.graphHoverCell = n.id;
+      applyGraphElementStates();
+      showGraphTooltip(ev, tooltipText);
+    });
     g.addEventListener('mousemove', moveGraphTooltip);
-    g.addEventListener('mouseleave', hideGraphTooltip);
+    g.addEventListener('mouseleave', function(){
+      appState.graphHoverCell = null;
+      applyGraphElementStates();
+      hideGraphTooltip();
+    });
 
     g.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -3722,10 +3929,9 @@ function renderGraph(){
   graphSvg.addEventListener('click', () => {});
 
   appState.graph = { layout, world };
-  if (!appState.inspectCell || !layout.nodeById[appState.inspectCell]) {
-    appState.inspectCell = root;
-  }
+  applyGraphElementStates();
   resetGraphView();
+  runGraphEntryAnimation(layout, world);
 }
 
 function initializeGraphInteractions(){
