@@ -111,7 +111,11 @@ test('graph animation metadata keeps edges attached to rendered nodes', { timeou
 setTimeout(() => {
   const result = { ok: false, checks: {} };
   try {
+    window.graphAnimationDebug.setReducedMotionForTest(false);
+    window.graphAnimationDebug.setGsapAvailableForTest(false);
+    renderGraph();
     window.graphAnimationDebug.clearActiveAnimations();
+    renderGraph();
     const nodes = new Set(Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(node => node.dataset.cell));
     const edges = Array.from(document.querySelectorAll('#graph-svg .edge')).map(edge => ({
       source: edge.dataset.source,
@@ -125,6 +129,7 @@ setTimeout(() => {
     result.checks = {
       nodeCount: nodes.size,
       edgeCount: edges.length,
+      activeAnimations: document.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running').length,
       policyMode: policy && policy.mode,
       policyLibrary: policy && policy.library,
       allEdgesHaveEndpoints: edges.every(edge => nodes.has(edge.source) && nodes.has(edge.target)),
@@ -133,6 +138,11 @@ setTimeout(() => {
     };
   } catch (error) {
     result.error = String(error && error.stack || error);
+  } finally {
+    try {
+      window.graphAnimationDebug.setReducedMotionForTest(null);
+      window.graphAnimationDebug.setGsapAvailableForTest(null);
+    } catch {}
   }
   const pre = document.createElement('pre');
   pre.id = 'browser-check-result';
@@ -145,6 +155,7 @@ setTimeout(() => {
 
   assert.ok(payload.checks.nodeCount > 1);
   assert.ok(payload.checks.edgeCount > 0);
+  assert.ok(payload.checks.activeAnimations > 0);
   assert.ok(['full', 'simple', 'disabled'].includes(payload.checks.policyMode));
   assert.ok(['gsap', 'web-animations', 'none'].includes(payload.checks.policyLibrary));
   assert.equal(payload.checks.allEdgesHaveEndpoints, true);

@@ -3683,7 +3683,15 @@ function animateGraphElements(elements, policy, options={}){
     const tween = window.gsap.fromTo(
       targets,
       { opacity: 0 },
-      { opacity: options.opacity ?? 1, duration, ease: 'power1.out', stagger: policy.mode === 'full' ? 0.006 : 0 }
+      {
+        opacity: options.opacity ?? 1,
+        duration,
+        ease: 'power1.out',
+        stagger: policy.mode === 'full' ? 0.006 : 0,
+        onComplete(){
+          appState.graphAnimation.active = appState.graphAnimation.active.filter(item => item !== tween);
+        }
+      }
     );
     appState.graphAnimation.active.push(tween);
     return;
@@ -3696,6 +3704,13 @@ function animateGraphElements(elements, policy, options={}){
         { duration: duration * 1000, easing: 'ease-out', fill: 'both' }
       );
       appState.graphAnimation.active.push(animation);
+      const cleanup = () => {
+        try { animation.cancel(); } catch {}
+        el.style.opacity = '';
+        appState.graphAnimation.active = appState.graphAnimation.active.filter(item => item !== animation);
+      };
+      if (animation.finished?.then) animation.finished.then(cleanup).catch(() => {});
+      setTimeout(cleanup, duration * 1000 + 80);
     }
     return;
   }
