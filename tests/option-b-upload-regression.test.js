@@ -1157,6 +1157,83 @@ test('warehouse export and import round trip preserves ranking evidence', { time
   assert.ok(payload.checks.importDiagnostics.every(status => status === 'current'));
 });
 
+test('warehouse import duplicate ids follow replacement policy', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const summary = {
+    schema_version: 'warehouse-duplicate-policy',
+    engine_name: 'Duplicate Policy Engine',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement benefit', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } },
+          B1: { cell: 'B1', genericField: 'FINAL_AVERAGE_COMPENSATION', description: 'Final average compensation input', hasFormula: false, runs: { XRD: { field: 'FINAL_AVERAGE_COMPENSATION', iob: 'I' } } },
+          C1: { cell: 'C1', genericField: 'CREDITED_SERVICE', description: 'Credited service input', hasFormula: false, runs: { XRD: { field: 'CREDITED_SERVICE', iob: 'I' } } }
+        },
+        formulas: {
+          A1: { cell: 'A1', formula: 'NPVF2(B1*C1,Plan_Int)', refs: ['B1', 'C1', 'Plan_Int'], functions: ['NPVF2'] }
+        }
+      }
+    },
+    namedRanges: ['Plan_Int']
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  try {
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(summary)}), 'duplicate-policy.json');
+    await engineWarehouse.refresh();
+    const bundle = await engineWarehouse.exportBundle();
+    const skipResult = await engineWarehouse.importBundle(bundle, { replaceExisting: false });
+    const afterSkipRecords = await engineWarehouse.getAll();
+    const replaceResult = await engineWarehouse.importBundle(bundle);
+    const afterReplaceRecords = await engineWarehouse.getAll();
+    const duplicateDiagnostic = skipResult.diagnostics.find(item => item.reason === 'duplicate_record');
+    result.ok = true;
+    result.checks = {
+      bundleRecordCount: bundle.record_count,
+      skipImported: skipResult.imported_count,
+      skipSkipped: skipResult.skipped_count,
+      duplicateReason: duplicateDiagnostic && duplicateDiagnostic.reason,
+      duplicateStatus: duplicateDiagnostic && duplicateDiagnostic.status,
+      afterSkipCount: afterSkipRecords.length,
+      replaceImported: replaceResult.imported_count,
+      replaceSkipped: replaceResult.skipped_count,
+      afterReplaceCount: afterReplaceRecords.length
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-duplicate-policy-');
+
+  assert.equal(payload.checks.bundleRecordCount, 1);
+  assert.equal(payload.checks.skipImported, 0);
+  assert.equal(payload.checks.skipSkipped, 1);
+  assert.equal(payload.checks.duplicateReason, 'duplicate_record');
+  assert.equal(payload.checks.duplicateStatus, 'skipped');
+  assert.equal(payload.checks.afterSkipCount, 1);
+  assert.equal(payload.checks.replaceImported, 1);
+  assert.equal(payload.checks.replaceSkipped, 0);
+  assert.equal(payload.checks.afterReplaceCount, 1);
+});
+
 test('warehouse drawer import/export controls and readiness indicators are wired', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

@@ -3,7 +3,7 @@
 **Feature Branch**: `001-reuse-report-scaling`  
 **Created**: 2026-04-27  
 **Status**: Draft  
-**Input**: User description: "Build an Approved V1 Reuse Candidate Report and warehouse scaling hardening layer for the PBGC V1 Engine Explorer. Use the existing browser-local V1 engine warehouse, metric extraction, aggregate analysis, pairwise comparison, and current-engine match ranking. Produce explainable reuse-candidate reports for selected/current engines against stored approved V1 engines. Prepare the warehouse for larger libraries through deterministic caching, schema versioning, migration handling, import/export, and performance tests. Do not integrate R5 yet."
+**Input**: User description: "Build an Approved V1 Reuse Candidate Report and warehouse scaling hardening layer for the PBGC V1 Engine Explorer. Use the existing browser-local V1 engine warehouse, metric extraction, aggregate analysis, pairwise comparison, and current-engine match ranking. Produce explainable reuse-candidate reports for the current engine against stored approved V1 engines. Prepare the warehouse for larger libraries through deterministic caching, schema versioning, migration handling, import/export, and performance tests. Do not integrate R5 yet."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -76,11 +76,11 @@ A user stores dozens or hundreds of approved V1 engines and expects ranking to r
 
 **Why this priority**: Pairwise comparisons are acceptable for small libraries, but reuse search must remain usable as approved V1 evidence grows.
 
-**Independent Test**: Generate a synthetic warehouse with at least 100 engines and verify ranking completes within the target time budget while preserving deterministic order.
+**Independent Test**: Generate a synthetic warehouse with at least 100 engines and verify ranking completes within 5000ms on the existing browser test harness while preserving deterministic order.
 
 **Acceptance Scenarios**:
 
-1. **Given** a synthetic warehouse of 100 stored engines, **When** ranking runs against the current engine, **Then** the top candidates are returned in deterministic order within the performance target.
+1. **Given** a synthetic warehouse of 100 stored engines, **When** ranking runs against the current engine, **Then** the top candidates are returned in deterministic order within 5000ms on the existing browser test harness.
 2. **Given** repeated ranking requests with unchanged inputs, **When** ranking runs again, **Then** cached metric/comparison data is reused and results remain identical.
 
 ### Edge Cases
@@ -92,7 +92,7 @@ A user stores dozens or hundreds of approved V1 engines and expects ranking to r
 - Stored record has no summary and no metrics: skip and include in missing evidence.
 - Two or more candidates have identical overall similarity: sort deterministically by display name/id.
 - Candidate has high overall similarity but one critical family score is low: flag as review risk.
-- Import bundle contains duplicate engine ids: deterministically replace, rename, or reject according to explicit policy.
+- Import bundle contains duplicate engine ids: default import replaces existing records with the bundle records; imports called with `replaceExisting: false` skip duplicate records and emit `duplicate_record` diagnostics.
 - Large warehouse: ranking must not block the UI indefinitely.
 
 ## Requirements *(mandatory)*
@@ -108,7 +108,7 @@ A user stores dozens or hundreds of approved V1 engines and expects ranking to r
 - **FR-007**: System MUST maintain metric schema/version metadata for stored records and comparison reports.
 - **FR-008**: System MUST handle older or incomplete stored records through migration, recomputation, or explicit exclusion diagnostics.
 - **FR-009**: Users MUST be able to export stored warehouse records as a JSON bundle.
-- **FR-010**: Users MUST be able to import a valid warehouse JSON bundle.
+- **FR-010**: Users MUST be able to import a valid warehouse JSON bundle; duplicate engine ids MUST be handled deterministically by replacing existing records by default or skipping duplicates with diagnostics when replacement is disabled.
 - **FR-011**: System MUST preserve provenance fields sufficient for review: source name, display name, imported timestamp, schema version, metric version, and counts.
 - **FR-012**: System MUST support performance testing with synthetic warehouses of at least 100 engines.
 - **FR-013**: System MUST avoid server dependencies; all behavior remains browser-compatible and client-side.
@@ -118,7 +118,7 @@ A user stores dozens or hundreds of approved V1 engines and expects ranking to r
 
 - **WarehouseEngineRecord**: Stored approved V1 engine evidence, including id, display name, source name, imported timestamp, normalized summary, metrics, metric rows, counts, summary schema version, and metric version.
 - **ReuseCandidateReport**: Report for one candidate against the current engine, including candidate identity, overall similarity/distance, family scores, top differences, top similarities, warnings, missing evidence, and provenance.
-- **WarehouseRankingReport**: Ordered list of reuse candidates plus metadata about target engine, excluded records, skipped records, metric version, generated timestamp, and performance timing.
+- **WarehouseRankingReport**: Ordered reuse-candidate result set plus metadata available through candidate diagnostics, excluded/skipped record diagnostics, metric version, generated timestamp, and performance timing where measured by the caller.
 - **WarehouseBundle**: Export/import JSON structure containing records, schema metadata, bundle timestamp, and validation results.
 - **MigrationDiagnostic**: Record-level decision describing whether metrics were current, recomputed, migrated, skipped, or failed validation.
 
@@ -129,7 +129,7 @@ A user stores dozens or hundreds of approved V1 engines and expects ranking to r
 - **SC-001**: A user can generate a top-candidate reuse report from a current engine and at least three stored engines in one action.
 - **SC-002**: Reports expose all five distance families and the overall weighted score for each displayed candidate.
 - **SC-003**: Empty, self-only, missing-metrics, and tie-ranking cases are covered by automated browser regression tests.
-- **SC-004**: A synthetic 100-engine warehouse ranking test completes within a defined target budget on the existing browser test harness.
+- **SC-004**: A synthetic 100-engine warehouse ranking test completes within 5000ms on the existing browser test harness.
 - **SC-005**: Export followed by import preserves ranking results for a fixed synthetic warehouse.
 - **SC-006**: Older or incomplete records produce explicit diagnostics rather than silent ranking failures.
 
@@ -138,6 +138,6 @@ A user stores dozens or hundreds of approved V1 engines and expects ranking to r
 - The existing single-page `index.html` app remains the primary runtime for this feature.
 - IndexedDB remains the browser-local persistence layer.
 - Existing metric families and profile weights are acceptable as the first ranking basis.
-- The current engine can be an uploaded summary, embedded sample, or loaded warehouse record.
+- The current engine can be an uploaded summary, embedded sample, or loaded warehouse record; selected stored-engine comparison remains available through pairwise comparison, but reuse-candidate ranking is scoped to the current engine for this feature.
 - R5 Summary Builder outputs and entitlement state-machine mapping require paired R5/V1 evidence and will be specified later.
 - This feature prepares for a future PBGC case workbench but does not attempt to integrate Plan Summary, Data Elements Listing, 436 Analysis, Plan Factors, V1 engine, Benefit Letter configuration, or DOPT workflows directly.

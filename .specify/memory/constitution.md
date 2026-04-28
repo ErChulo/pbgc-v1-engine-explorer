@@ -1,50 +1,42 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# PBGC V1 Engine Explorer Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Browser-Local First
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+The application MUST remain usable as an offline-capable single-page browser app unless a feature is explicitly scoped as server-backed. Core warehouse, metric extraction, comparison, import/export, and reporting behavior MUST NOT require network access or a running server.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. Explainable Actuarial Evidence
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+Similarity scores MUST be traceable to family-level metrics, component distances, weights, warnings, and missing evidence. The application MUST frame results as reuse-candidate evidence for professional review, not as an approval decision.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### III. Deterministic and Versioned Metrics
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+Metric extraction, warehouse ranking, tie-breaking, import/export, and migration behavior MUST be deterministic for the same inputs. Stored records and comparison outputs MUST preserve schema and metric-version metadata so stale or incompatible evidence can be migrated, recomputed, or explicitly skipped.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### IV. Regression-Backed Workflows
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+Changes to scoring, warehouse persistence, import/export, ranking, and UI wiring MUST include focused automated regression coverage. Edge cases such as empty warehouses, self-only warehouses, stale metrics, missing summaries, duplicate imports, and deterministic ranking ties MUST be tested when affected.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### V. Data Provenance and Integration Discipline
+
+Warehouse records MUST preserve enough provenance for review, including source name, display name, import timestamp, summary schema version, metric version, and relevant diagnostics. R5/provision-state-machine integration MUST wait for paired R5/V1 evidence and a separate specification.
+
+## Engineering Constraints
+
+- Keep runtime dependencies minimal and browser-compatible.
+- Prefer transparent scalar, set, vector, text-token, and weighted-distance metrics before opaque or machine-learning approaches.
+- Keep UI changes proportional to the workflow; do not add polished screens before the underlying evidence model is stable.
+- Preserve existing local data whenever safe; otherwise report explicit diagnostics instead of failing silently.
+
+## Development Workflow
+
+- Update spec, plan, tasks, tests, and docs together when behavior changes.
+- Run the relevant regression command before commit; for this project the primary command is `node --test tests\option-b-upload-regression.test.js`.
+- Commit only coherent, reviewed changes and do not mix unrelated refactors with feature work.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution governs feature specifications, implementation plans, tasks, and review decisions for the PBGC V1 Engine Explorer. Amendments require updating this file and reconciling affected specs, plans, tasks, and documentation.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-04-27 | **Last Amended**: 2026-04-27

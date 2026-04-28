@@ -15,13 +15,13 @@ Build the next hardening layer on top of the existing browser-local V1 warehouse
 **Testing**: `node --test tests/option-b-upload-regression.test.js` with headless Chrome/Edge harness  
 **Target Platform**: Offline-capable single-page HTML app running locally in modern Chromium browsers  
 **Project Type**: Single-page browser application with local tests  
-**Performance Goals**: Rank 100 synthetic warehouse engines against a current engine within an explicit browser-test budget; repeated unchanged rankings should avoid unnecessary metric recomputation  
+**Performance Goals**: Rank 100 synthetic warehouse engines against a current engine within 5000ms in the existing browser test harness; repeated unchanged rankings should avoid unnecessary metric recomputation
 **Constraints**: No server dependency; deterministic scoring; no R5 integration in this feature; preserve existing warehouse records where possible  
 **Scale/Scope**: Approved V1 warehouse from small libraries to at least 100 stored engines in synthetic tests
 
 ## Constitution Check
 
-The current `.specify/memory/constitution.md` is still a placeholder, so no formal project constitution gates can be enforced from it yet.
+The project constitution requires browser-local execution, explainable scoring, deterministic/versioned metrics, regression-backed changes, and explicit limits around approval certainty.
 
 Practical gates for this feature:
 
@@ -30,7 +30,7 @@ Practical gates for this feature:
 - Explainability: every report exposes overall and family-level scores plus top differences/warnings.
 - Persistence safety: older/incomplete records are migrated, recomputed, or explicitly skipped with diagnostics.
 - Regression coverage: empty/self-only/missing-metric/tie cases remain covered.
-- Performance coverage: synthetic 100-engine ranking test added before optimization is considered complete.
+- Performance coverage: synthetic 100-engine ranking test must complete within 5000ms before optimization is considered complete.
 
 ## Project Structure
 
@@ -57,13 +57,13 @@ tests/option-b-upload-regression.test.js
 1. Add a report-generation layer on top of `rankWarehouseMatchesForMetrics`.
 2. Define stable report objects:
    - `ReuseCandidateReport`
-   - `WarehouseRankingReport`
+   - `WarehouseRankingReport`/ordered reuse-candidate result set
    - `MigrationDiagnostic`
    - `WarehouseBundle`
 3. Add schema/version metadata to stored records without breaking existing records.
 4. Add migration/recompute behavior for records with summary but missing/stale metrics.
 5. Add explicit skip diagnostics for unusable records.
-6. Add export/import JSON bundle functions and minimal UI controls.
+6. Add export/import JSON bundle functions, deterministic duplicate-id policy, and minimal UI controls.
 7. Add performance tests using synthetic warehouse records.
 8. Add browser UI rendering for a report summary that can later be expanded into a formal case workbench artifact.
 
@@ -97,7 +97,8 @@ Expected additional coverage:
 - migration/recompute of missing metrics from valid summaries
 - skip diagnostics for unusable records
 - export/import round trip preserves ranking
-- synthetic 100-engine ranking remains deterministic and within budget
+- duplicate import ids replace by default and skip with `duplicate_record` diagnostics when replacement is disabled
+- synthetic 100-engine ranking remains deterministic and within the 5000ms budget
 
 ## Complexity Tracking
 
