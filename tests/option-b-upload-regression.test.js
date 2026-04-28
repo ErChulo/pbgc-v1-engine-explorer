@@ -475,6 +475,54 @@ setTimeout(() => {
   assert.equal(payload.checks.largeEdgeCount, payload.checks.largePolicyEdges);
 });
 
+test('graph tooltip auto-dismisses after ten seconds of hover', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    const node = document.querySelector('#graph-svg .node-hit');
+    if (!node) throw new Error('No graph node found.');
+    node.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, clientX: 24, clientY: 24 }));
+    setTimeout(() => {
+      const visibleInitially = !document.getElementById('graph-tooltip').hidden;
+      setTimeout(() => {
+        result.ok = true;
+        result.checks = {
+          visibleInitially,
+          hiddenAfterTimeout: document.getElementById('graph-tooltip').hidden,
+          hasShowClassAfterTimeout: document.getElementById('graph-tooltip').classList.contains('show')
+        };
+        const pre = document.createElement('pre');
+        pre.id = 'browser-check-result';
+        pre.textContent = JSON.stringify(result);
+        document.body.appendChild(pre);
+      }, 10500);
+    }, 80);
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+    const pre = document.createElement('pre');
+    pre.id = 'browser-check-result';
+    pre.textContent = JSON.stringify(result);
+    document.body.appendChild(pre);
+  }
+}, 300);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'graph-tooltip-timeout-');
+
+  assert.equal(payload.checks.visibleInitially, true);
+  assert.equal(payload.checks.hiddenAfterTimeout, true);
+  assert.equal(payload.checks.hasShowClassAfterTimeout, false);
+});
+
 test('Option B JSON upload scopes source tab/run and keeps tree toggle local', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {
@@ -535,6 +583,14 @@ test('Option B JSON upload scopes source tab/run and keeps tree toggle local', {
   function text(id){ return (document.getElementById(id)?.textContent || '').trim(); }
   function selectedText(id){ const el = document.getElementById(id); return el?.selectedOptions?.[0]?.textContent?.trim() || ''; }
   function nodeTexts(){ return Array.from(document.querySelectorAll('#graph-svg .node-hit text')).map(n => n.textContent.trim()); }
+  async function waitFor(predicate, timeoutMs = 4000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
   try {
     const input = document.getElementById('load-json-input');
     const file = new File([JSON.stringify(${JSON.stringify(optionB)})], 'option-b.json', { type: 'application/json' });
@@ -542,7 +598,8 @@ test('Option B JSON upload scopes source tab/run and keeps tree toggle local', {
     dt.items.add(file);
     input.files = dt.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 600));
+    const uploaded = await waitFor(() => text('upload-status-name') === 'option-b.json');
+    if (!uploaded) throw new Error('Option B upload did not finish.');
     const beforeToggle = {
       root: selectedText('root-select'),
       source: document.getElementById('source-tab-select').value,
@@ -749,6 +806,143 @@ test('JSON upload stores normalized summary and metrics in browser warehouse', {
   assert.ok(payload.checks.metricTiles.some(tile => tile.label === 'Max depth'));
 });
 
+test('drawer UX shows current engine version and stronger visual separation', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+setTimeout(() => {
+  const result = { ok: false, checks: {} };
+  try {
+    document.body.classList.add('drawer-open');
+    const drawer = document.getElementById('drawer-panel');
+    const overlay = document.getElementById('drawer-overlay');
+    const sections = Array.from(document.querySelectorAll('#drawer-panel .drawer-section'));
+    const button = document.querySelector('#drawer-panel .mini-button');
+    const select = document.querySelector('#drawer-panel .compact-select');
+    result.ok = true;
+    result.checks = {
+      drawerWidth: drawer.getBoundingClientRect().width,
+      viewportWidth: window.innerWidth,
+      overlayBlur: getComputedStyle(overlay).backdropFilter || getComputedStyle(overlay).webkitBackdropFilter || '',
+      sectionBackgrounds: sections.map(section => getComputedStyle(section).backgroundColor),
+      buttonBackground: getComputedStyle(button).backgroundImage || getComputedStyle(button).backgroundColor,
+      selectBackground: getComputedStyle(select).backgroundImage || getComputedStyle(select).backgroundColor,
+      currentEngine: document.getElementById('current-engine-name').textContent.trim(),
+      appVersion: document.getElementById('app-version').textContent.trim(),
+      inputMultiple: document.getElementById('load-json-input').multiple
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+}, 300);
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'drawer-ux-hooks-');
+
+  assert.ok(payload.checks.drawerWidth / payload.checks.viewportWidth >= 0.45);
+  assert.match(payload.checks.overlayBlur, /blur/);
+  assert.ok(new Set(payload.checks.sectionBackgrounds).size >= 2);
+  assert.notEqual(payload.checks.buttonBackground, payload.checks.selectBackground);
+  assert.ok(payload.checks.currentEngine.length > 0);
+  assert.match(payload.checks.appVersion, /^v\d+\./);
+  assert.equal(payload.checks.inputMultiple, true);
+});
+
+test('bulk JSON upload imports unique files and blocks duplicate source names', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function summary(name, field) {
+    return {
+      schema_version: 'bulk-upload',
+      engine_name: name,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: field, description: field, hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'INPUT', description: 'Input', hasFormula: false, runs: { XRD: { field: 'INPUT', iob: 'I' } } }
+          },
+          formulas: { A1: { cell: 'A1', formula: 'ROUND(B1,2)', refs: ['B1'], functions: ['ROUND'] } }
+        }
+      },
+      namedRanges: []
+    };
+  }
+  const existing = summary('Existing Bulk', 'EXISTING_BENEFIT');
+  const unique = summary('Unique Bulk', 'UNIQUE_BENEFIT');
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  const alerts = [];
+  window.alert = message => alerts.push(String(message));
+  try {
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(existing)}), 'dup.json');
+    const input = document.getElementById('load-json-input');
+    const dt = new DataTransfer();
+    dt.items.add(new File([JSON.stringify(${JSON.stringify(existing)})], 'dup.json', { type: 'application/json' }));
+    dt.items.add(new File([JSON.stringify(${JSON.stringify(unique)})], 'unique-bulk.json', { type: 'application/json' }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    async function waitFor(predicate, timeoutMs = 5000) {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        if (await predicate()) return true;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      return false;
+    }
+    const stored = await waitFor(async () => (await engineWarehouse.getAll()).some(record => record.sourceName === 'unique-bulk.json'));
+    const records = await engineWarehouse.getAll();
+    result.ok = true;
+    result.checks = {
+      stored,
+      duplicateCount: records.filter(record => record.sourceName === 'dup.json').length,
+      uniqueCount: records.filter(record => record.sourceName === 'unique-bulk.json').length,
+      alerts,
+      uploadName: document.getElementById('upload-status-name').textContent.trim(),
+      uploadMeta: document.getElementById('upload-status-meta').textContent.trim(),
+      currentEngine: document.getElementById('current-engine-name').textContent.trim()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'bulk-upload-');
+
+  assert.equal(payload.checks.stored, true);
+  assert.equal(payload.checks.duplicateCount, 1);
+  assert.equal(payload.checks.uniqueCount, 1);
+  assert.ok(payload.checks.alerts.some(message => message.includes('dup.json')));
+  assert.equal(payload.checks.uploadName, 'Bulk upload complete');
+  assert.match(payload.checks.uploadMeta, /1 imported/);
+  assert.equal(payload.checks.currentEngine, 'unique-bulk.json');
+});
+
 test('warehouse compare controls render profile similarity tiles for two stored engines', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {
@@ -831,6 +1025,7 @@ test('warehouse compare controls render profile similarity tiles for two stored 
       selectedA: document.getElementById('warehouse-compare-a').value,
       selectedB: document.getElementById('warehouse-compare-b').value,
       tiles: tiles(),
+      overallSummary: document.querySelector('#warehouse-compare-results .comparison-overall-summary')?.textContent || '',
       status: document.getElementById('warehouse-status-name').textContent,
       benefitDistance: report.family_distances.benefit_architecture.distance
     };
@@ -856,6 +1051,8 @@ test('warehouse compare controls render profile similarity tiles for two stored 
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Formula' && /%$/.test(tile.value)));
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Benefit' && /%$/.test(tile.value)));
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Top difference' && tile.value !== 'None'));
+  assert.match(payload.checks.overallSummary, /Overall similarity/);
+  assert.match(payload.checks.overallSummary, /Overall distance/);
 });
 
 test('warehouse aggregate analysis summarizes stored V1 engine library', { timeout: 30000 }, t => {
@@ -949,6 +1146,7 @@ test('warehouse aggregate analysis summarizes stored V1 engine library', { timeo
       pairCount: summary.pairwise_spread.pairCount,
       hasMostSimilar: !!summary.pairwise_spread.mostSimilar,
       hasMostDistinct: !!summary.pairwise_spread.mostDistinct,
+      riskInfoTitle: document.querySelector('#warehouse-aggregate-results .info-icon')?.getAttribute('title') || '',
       tiles: tiles()
     };
   } catch (error) {
@@ -976,6 +1174,7 @@ test('warehouse aggregate analysis summarizes stored V1 engine library', { timeo
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Benefit domains' && tile.value.includes('normal_retirement')));
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Functions' && tile.value.includes('NPVF2')));
   assert.ok(payload.checks.tiles.some(tile => tile.label === 'Highest risk' && tile.value.includes('aggregate-risky.json')));
+  assert.match(payload.checks.riskInfoTitle, /unresolved references/);
 });
 
 test('warehouse ranks stored engines as reuse candidates for current engine', { timeout: 30000 }, t => {
@@ -1871,6 +2070,14 @@ test('run selection does not borrow formulas from cells missing that run entry',
   function options(id){ return Array.from(document.getElementById(id).options).map(o => o.textContent.trim()); }
   function values(id){ return Array.from(document.getElementById(id).options).map(o => o.value); }
   function graphNodes(){ return Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(n => n.dataset.cell); }
+  async function waitFor(predicate, timeoutMs = 4000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
   try {
     const input = document.getElementById('load-json-input');
     const file = new File([JSON.stringify(${JSON.stringify(data)})], 'run-scope.json', { type: 'application/json' });
@@ -1878,7 +2085,8 @@ test('run selection does not borrow formulas from cells missing that run entry',
     dt.items.add(file);
     input.files = dt.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 600));
+    const uploaded = await waitFor(() => values('root-select').includes('N308'));
+    if (!uploaded) throw new Error('Run-scope upload did not finish.');
 
     document.getElementById('root-select').value = 'N308';
     document.getElementById('root-select').dispatchEvent(new Event('change', { bubbles: true }));
@@ -1996,6 +2204,14 @@ test('quoted named range formula renders named range precedent', { timeout: 3000
   const result = { ok: false, checks: {} };
   function selectedText(id){ const el = document.getElementById(id); return el?.selectedOptions?.[0]?.textContent?.trim() || ''; }
   function graphNodes(){ return Array.from(document.querySelectorAll('#graph-svg .node-hit')).map(n => n.dataset.cell); }
+  async function waitFor(predicate, timeoutMs = 4000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
   try {
     const input = document.getElementById('load-json-input');
     const file = new File([JSON.stringify(${JSON.stringify(data)})], 'named-range.json', { type: 'application/json' });
@@ -2003,7 +2219,8 @@ test('quoted named range formula renders named range precedent', { timeout: 3000
     dt.items.add(file);
     input.files = dt.files;
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 600));
+    const uploaded = await waitFor(() => selectedText('root-select').includes('AEQ_INTEREST'));
+    if (!uploaded) throw new Error('Named-range upload did not finish.');
     result.ok = true;
     result.checks = {
       root: selectedText('root-select'),

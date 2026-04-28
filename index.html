@@ -61,6 +61,13 @@
   --icon-fg:#f8dc7f;
   --logo-bg:linear-gradient(180deg,#102238,#0f1a29);
   --graph-bg:#000000;
+  --drawer-section-1:rgba(126,184,255,.075);
+  --drawer-section-2:rgba(148,242,202,.07);
+  --drawer-section-3:rgba(223,187,255,.07);
+  --drawer-section-4:rgba(255,212,121,.065);
+  --button-bg:linear-gradient(180deg,#1d4f86,#163b66);
+  --button-text:#f7fbff;
+  --input-bg:linear-gradient(180deg,#09131f,#07101a);
 }
 html[data-theme="light"]{
   --bg:#dfe8f2;
@@ -114,6 +121,13 @@ html[data-theme="light"]{
   --icon-fg:#114fae;
   --logo-bg:linear-gradient(180deg,#ffffff,#eef3f8);
   --graph-bg:#f8fafc;
+  --drawer-section-1:rgba(191,219,254,.52);
+  --drawer-section-2:rgba(187,247,208,.44);
+  --drawer-section-3:rgba(233,213,255,.45);
+  --drawer-section-4:rgba(254,240,138,.38);
+  --button-bg:linear-gradient(180deg,#1459c8,#0f46a3);
+  --button-text:#ffffff;
+  --input-bg:linear-gradient(180deg,#ffffff,#edf3fa);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -128,6 +142,11 @@ body{margin:0;color:var(--text);font-family:var(--font);background:var(--body-bg
 .brand-title{display:grid;gap:4px;min-width:0}
 .brand-title h2{margin:0;font-size:22px;line-height:1.02;letter-spacing:.01em}
 .brand-sub{font-size:11px;color:var(--muted);line-height:1.2}
+.current-engine-pill{display:grid;gap:2px;min-width:220px;max-width:min(42vw,560px);padding:7px 10px;border:1px solid var(--line-soft);border-radius:12px;background:color-mix(in srgb, var(--accent) 7%, var(--panel));box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+.current-engine-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.current-engine-name{font-size:13px;font-weight:800;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.current-engine-meta{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app-version{font-size:11px;font-weight:800;color:var(--accent-2);border:1px solid var(--line-soft);border-radius:999px;padding:6px 8px;background:color-mix(in srgb, var(--panel-2) 72%, transparent);white-space:nowrap}
 .control{display:grid;gap:4px;min-width:0}
 .source-control{order:1}
 .field-control{order:2}
@@ -140,7 +159,7 @@ body{margin:0;color:var(--text);font-family:var(--font);background:var(--body-bg
 .depth-mini .compact-select{padding:8px 10px}
 .control.wide{grid-column:auto}
 .control label{font-size:12px;color:var(--muted);letter-spacing:.03em}
-.select,.compact-select{width:100%;min-width:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:13px;padding:10px 12px;outline:none;box-shadow:var(--shadow)}
+.select,.compact-select{width:100%;min-width:0;border:1px solid color-mix(in srgb, var(--line) 88%, var(--muted));border-radius:12px;background:var(--input-bg);color:var(--text);font-size:13px;padding:10px 12px;outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 8px 20px rgba(0,0,0,.12)}
 .compact-select{padding:10px 12px}
 .scope-status{min-height:16px;font-size:11px;line-height:1.35;color:var(--muted)}
 .compact-select:disabled{opacity:.62;cursor:not-allowed}
@@ -228,21 +247,25 @@ pre.formula-root{margin:0;padding:10px 12px;border:1px solid var(--line-soft);bo
 /* v2.6.7 header + drawer layout patch */
 .app{grid-template-rows:56px 1fr;gap:8px;padding:8px}
 .topbar{display:block}
-.utility-panel{display:grid !important;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:48px;padding:6px 10px !important;border-radius:16px}
+.utility-panel{display:grid !important;grid-template-columns:auto minmax(0,1fr) minmax(220px,auto) auto auto;align-items:center;gap:10px;min-height:48px;padding:6px 10px !important;border-radius:16px}
 .brand-mark{width:38px;height:38px;border-radius:12px;box-shadow:none}
 .brand-title h2{font-size:20px;line-height:1.05}
 .brand-sub{display:none}
 .header-actions{display:flex;align-items:center;gap:8px}
 .hamburger{width:40px;height:40px;font-size:18px}
-.controls-panel{position:fixed;top:8px;right:8px;bottom:8px;width:min(420px,92vw);z-index:50;transform:translateX(calc(100% + 16px));transition:transform .28s ease, box-shadow .28s ease;overflow:auto;padding:12px}
+.controls-panel{position:fixed;top:8px;right:8px;bottom:8px;width:min(760px,50vw);max-width:96vw;z-index:50;transform:translateX(calc(100% + 16px));transition:transform .28s ease, box-shadow .28s ease;overflow:auto;padding:14px}
 body.drawer-open .controls-panel{transform:translateX(0)}
-.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.18);backdrop-filter:blur(1.5px);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:40}
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.52);backdrop-filter:blur(7px);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:40}
+html[data-theme="light"] .drawer-overlay{background:rgba(15,23,42,.34)}
 body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .drawer-title{font-size:16px;font-weight:700}
 .drawer-close{font-size:16px}
-.drawer-section{display:grid;gap:8px;padding-top:10px;margin-top:10px;border-top:1px solid var(--line-soft)}
-.drawer-section:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.drawer-section{display:grid;gap:9px;padding:12px;margin-top:10px;border:1px solid var(--line-soft);border-radius:14px;background:var(--drawer-section-1)}
+.drawer-section:nth-of-type(2){background:var(--drawer-section-2)}
+.drawer-section:nth-of-type(3){background:var(--drawer-section-3)}
+.drawer-section:nth-of-type(4){background:var(--drawer-section-4)}
+.drawer-section:first-of-type{margin-top:0}
 .drawer-section-title{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .controls-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px !important;align-items:end}
 .controls-panel .control.wide{grid-column:auto}
@@ -255,7 +278,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .sort-options{display:flex;flex-wrap:wrap;gap:8px}
 .upload-block{display:grid;gap:6px}
 .upload-actions{display:flex;flex-wrap:wrap;gap:8px}
-.mini-button{appearance:none;border:1px solid var(--line);background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);border-radius:12px;padding:8px 12px;font:600 12px/1 var(--font);cursor:pointer;transition:transform .12s ease,border-color .12s ease,filter .12s ease}
+.mini-button{appearance:none;border:1px solid color-mix(in srgb, var(--accent) 56%, var(--line));background:var(--button-bg);color:var(--button-text);border-radius:12px;padding:8px 12px;font:750 12px/1 var(--font);cursor:pointer;transition:transform .12s ease,border-color .12s ease,filter .12s ease;box-shadow:0 8px 20px rgba(0,0,0,.18)}
 .mini-button:hover{border-color:var(--accent);filter:brightness(1.03)}
 .mini-button:active{transform:translateY(1px)}
 .upload-status{display:grid;gap:2px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:14px;background:linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent)}
@@ -285,12 +308,18 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .warehouse-compare{display:grid;gap:8px;padding-top:2px}
 .warehouse-compare-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:center}
 .warehouse-compare-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.comparison-overall-summary{grid-column:1 / -1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:11px 12px;border:1px solid color-mix(in srgb, var(--accent) 36%, var(--line));border-radius:12px;background:color-mix(in srgb, var(--accent) 10%, var(--panel));box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.comparison-overall-summary .summary-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.comparison-overall-summary .summary-value{font-size:24px;font-weight:850;color:var(--text);font-variant-numeric:tabular-nums}
+.comparison-overall-summary .summary-note{font-size:11px;color:var(--muted)}
 .metric-tile{display:grid;gap:2px;padding:8px 9px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--panel-2) 62%, transparent)}
 .metric-tile .metric-label{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
 .metric-tile .metric-value{font-size:14px;font-weight:750;color:var(--text);font-variant-numeric:tabular-nums}
 .sort-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:linear-gradient(180deg,var(--select-bg),var(--select-bg-2));color:var(--text);font-size:12px;cursor:pointer;user-select:none}
 .sort-chip input{accent-color:var(--accent)}
 .drawer-notes{padding:0;border:0;background:transparent}
+.info-icon{display:inline-grid;place-items:center;width:17px;height:17px;margin-left:5px;border-radius:50%;border:1px solid color-mix(in srgb, var(--accent) 45%, var(--line));color:var(--accent-2);font-size:11px;font-weight:900;cursor:help;background:color-mix(in srgb, var(--accent) 10%, transparent);vertical-align:middle}
+.info-icon::before{content:"i"}
 .drawer-notes .note-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;text-transform:uppercase}
 .drawer-notes .note-list{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.5}
 .workspace{grid-template-columns:minmax(0,1.78fr) minmax(320px,.88fr);gap:8px}
@@ -298,9 +327,10 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .tree-meta{padding:7px 10px}
 .tree-scroll{padding:8px 10px 10px 10px}
 @media (max-width: 980px){
-  .utility-panel{grid-template-columns:auto minmax(0,1fr) auto}
+  .utility-panel{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"logo title actions" "engine engine engine"}
+  .brand-mark{grid-area:logo}.brand-title{grid-area:title}.current-engine-pill{grid-area:engine;max-width:none}.header-actions{grid-area:actions}.app-version{display:none}
   .workspace{grid-template-columns:1fr;grid-template-rows:minmax(360px,1.05fr) minmax(280px,.95fr)}
-  .controls-panel{width:min(440px,96vw)}
+  .controls-panel{width:min(560px,96vw)}
 }
 @media (max-width: 640px){
   .controls-grid{grid-template-columns:1fr}
@@ -632,7 +662,7 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <label>Load V1Summary.json</label>
         <div class="upload-actions">
           <button id="load-json-button" class="mini-button" type="button">Choose JSON</button>
-          <input id="load-json-input" type="file" accept=".json,application/json" hidden>
+          <input id="load-json-input" type="file" accept=".json,application/json" multiple hidden>
         </div>
         <div class="upload-status" aria-live="polite">
           <div id="upload-status-name" class="name">Embedded sample</div>
@@ -722,6 +752,12 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <h2>V1 Engine Explorer</h2>
         <div class="brand-sub">PBGC placeholder logo</div>
       </div>
+      <div class="current-engine-pill" aria-label="Current V1 engine">
+        <div class="current-engine-label">Current V1 engine</div>
+        <div id="current-engine-name" class="current-engine-name">Embedded sample</div>
+        <div id="current-engine-meta" class="current-engine-meta">Client-side only</div>
+      </div>
+      <div id="app-version" class="app-version" aria-label="Application version">v2.6.8.2</div>
       <div class="header-actions">
         <button id="drawer-toggle" class="icon-button hamburger" type="button" aria-label="Open controls" title="Open controls">☰</button>
       </div>
@@ -1110,6 +1146,7 @@ function normalizeSummary(raw){
   };
 }
 
+const APP_VERSION = 'v2.6.8.2';
 let DATA = normalizeSummary(EMBEDDED_DATA);
 
 const appState = {
@@ -1170,6 +1207,9 @@ const loadJsonButton = document.getElementById('load-json-button');
 const loadJsonInput = document.getElementById('load-json-input');
 const uploadStatusName = document.getElementById('upload-status-name');
 const uploadStatusMeta = document.getElementById('upload-status-meta');
+const currentEngineName = document.getElementById('current-engine-name');
+const currentEngineMeta = document.getElementById('current-engine-meta');
+const appVersionEl = document.getElementById('app-version');
 const warehouseSelect = document.getElementById('warehouse-select');
 const warehouseLoadButton = document.getElementById('warehouse-load-button');
 const warehouseDeleteButton = document.getElementById('warehouse-delete-button');
@@ -1206,6 +1246,14 @@ function datasetDisplayMeta(data){
 function updateUploadStatus(nameText, metaText){
   if (uploadStatusName) uploadStatusName.textContent = nameText;
   if (uploadStatusMeta) uploadStatusMeta.textContent = metaText;
+  if (currentEngineName) currentEngineName.textContent = nameText;
+  if (currentEngineMeta) currentEngineMeta.textContent = metaText;
+  if (appVersionEl) appVersionEl.textContent = APP_VERSION;
+}
+
+function updateUploadPanelStatus(nameText, metaText){
+  if (uploadStatusName) uploadStatusName.textContent = nameText;
+  if (uploadStatusMeta) uploadStatusMeta.textContent = metaText;
 }
 
 function updateWarehouseStatus(nameText, metaText){
@@ -1230,6 +1278,14 @@ function metricTile(label, value){
   const labelEl = document.createElement('div');
   labelEl.className = 'metric-label';
   labelEl.textContent = label;
+  if (String(label).toLowerCase().includes('risk')) {
+    const info = document.createElement('span');
+    info.className = 'info-icon';
+    info.textContent = '';
+    info.title = 'Risk is an operational quality score based on unresolved references, parse errors, empty formula arguments, circularity, high-degree hubs, and excessive complexity. Higher means more review attention is needed.';
+    info.setAttribute('aria-label', info.title);
+    labelEl.appendChild(info);
+  }
   const valueEl = document.createElement('div');
   valueEl.className = 'metric-value';
   valueEl.textContent = formatMetricValue(value);
@@ -1500,8 +1556,18 @@ function renderWarehouseComparison(report){
   const profile = report.profile_scores || {};
   const family = report.family_distances || {};
   const top = report.top_differences?.[0];
+  const overall = profile.overall_weighted_similarity || {};
+  const summary = document.createElement('div');
+  summary.className = 'comparison-overall-summary';
+  const similarity = document.createElement('div');
+  similarity.innerHTML = `<div class="summary-label">Overall similarity</div><div class="summary-value">${scorePercent(overall.similarity)}</div><div class="summary-note">Weighted across benefit, formula, field, structure, and risk.</div>`;
+  const distance = document.createElement('div');
+  distance.innerHTML = `<div class="summary-label">Overall distance</div><div class="summary-value">${scorePercent(overall.distance)}</div><div class="summary-note">Lower distance means the engines are closer.</div>`;
+  summary.appendChild(similarity);
+  summary.appendChild(distance);
+  warehouseCompareResults.appendChild(summary);
   const tiles = [
-    ['Overall', scorePercent(profile.overall_weighted_similarity?.similarity)],
+    ['Overall', scorePercent(overall.similarity)],
     ['Formula', scorePercent(profile.formula_similarity?.similarity)],
     ['Benefit', scorePercent(profile.benefit_architecture_similarity?.similarity)],
     ['Risk', scorePercent(profile.risk_complexity_similarity?.similarity)],
@@ -3928,14 +3994,20 @@ function setTooltipPosition(ev){
   graphTooltip.style.top = y + "px";
 }
 
+let graphTooltipTimer = null;
+
 function showGraphTooltip(ev, text){
   if (!graphTooltip) return;
+  if (graphTooltipTimer) clearTimeout(graphTooltipTimer);
   graphTooltip.textContent = text;
   graphTooltip.hidden = false;
   requestAnimationFrame(function(){
     graphTooltip.classList.add("show");
     setTooltipPosition(ev);
   });
+  graphTooltipTimer = setTimeout(() => {
+    hideGraphTooltip();
+  }, 10000);
 }
 
 function moveGraphTooltip(ev){
@@ -3945,6 +4017,10 @@ function moveGraphTooltip(ev){
 
 function hideGraphTooltip(){
   if (!graphTooltip) return;
+  if (graphTooltipTimer) {
+    clearTimeout(graphTooltipTimer);
+    graphTooltipTimer = null;
+  }
   graphTooltip.classList.remove("show");
   graphTooltip.hidden = true;
 }
@@ -4638,24 +4714,44 @@ if (loadJsonButton && loadJsonInput) {
     loadJsonInput.click();
   });
   loadJsonInput.addEventListener('change', async () => {
-    const file = loadJsonInput.files?.[0];
-    if (!file) return;
+    const files = Array.from(loadJsonInput.files || []);
+    if (!files.length) return;
+    const existingRecords = await warehouseGetAll();
+    const existingSourceNames = new Set(existingRecords.map(record => String(record.sourceName || '').toLowerCase()).filter(Boolean));
+    const batch = { accepted: 0, duplicates: [], failed: [] };
     try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      const summary = applyLoadedSummary(parsed, file.name);
-      try {
-        await storeSummaryInWarehouse(summary, file.name);
-      } catch (warehouseError) {
-        console.error(warehouseError);
-        updateWarehouseStatus('Warehouse save failed', 'The file loaded, but it was not stored locally.');
+      for (const file of files) {
+        const sourceName = file.name || 'selected file';
+        if (existingSourceNames.has(sourceName.toLowerCase())) {
+          batch.duplicates.push(sourceName);
+          continue;
+        }
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+          const summary = applyLoadedSummary(parsed, sourceName);
+          await storeSummaryInWarehouse(summary, sourceName);
+          existingSourceNames.add(sourceName.toLowerCase());
+          batch.accepted++;
+        } catch (error) {
+          console.error(error);
+          batch.failed.push(sourceName);
+        }
       }
-    } catch (error) {
-      console.error(error);
-      updateUploadStatus(
-        'Load failed',
-        `Could not parse ${file.name || 'selected file'} as JSON.`
-      );
+      if (batch.duplicates.length) {
+        alert(`Duplicate JSON upload cancelled for: ${batch.duplicates.join(', ')}`);
+      }
+      if (files.length > 1 || batch.duplicates.length || batch.failed.length) {
+        const parts = [`${batch.accepted} imported`];
+        if (batch.duplicates.length) parts.push(`${batch.duplicates.length} duplicate skipped`);
+        if (batch.failed.length) parts.push(`${batch.failed.length} failed`);
+        updateUploadPanelStatus('Bulk upload complete', parts.join(' | '));
+      } else if (batch.accepted === 0 && batch.failed.length) {
+        updateUploadPanelStatus('Load failed', `Could not parse ${batch.failed[0]} as JSON.`);
+      }
+      if (batch.accepted === 0 && batch.duplicates.length && !batch.failed.length) {
+        updateUploadPanelStatus('Duplicate upload cancelled', batch.duplicates.join(', '));
+      }
     } finally {
       loadJsonInput.value = '';
     }
