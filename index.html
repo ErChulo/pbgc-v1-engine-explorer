@@ -255,6 +255,8 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .warehouse-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .warehouse-aggregate{display:grid;gap:8px;padding-top:2px}
 .warehouse-aggregate-results{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.warehouse-bundle{display:grid;gap:8px;padding-top:2px}
+.warehouse-bundle-row{display:flex;flex-wrap:wrap;gap:8px}
 .warehouse-match{display:grid;gap:8px;padding-top:2px}
 .warehouse-match-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
 .warehouse-match-results{display:grid;gap:6px}
@@ -639,6 +641,14 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
         <div class="warehouse-aggregate" aria-label="Warehouse aggregate analysis">
           <label>Aggregate analysis</label>
           <div id="warehouse-aggregate-results" class="warehouse-aggregate-results" aria-live="polite"></div>
+        </div>
+        <div class="warehouse-bundle" aria-label="Warehouse import and export">
+          <label>Warehouse bundle</label>
+          <div class="warehouse-bundle-row">
+            <button id="warehouse-export-button" class="mini-button" type="button" disabled>Export</button>
+            <button id="warehouse-import-button" class="mini-button" type="button">Import</button>
+            <input id="warehouse-import-input" type="file" accept=".json,application/json" hidden>
+          </div>
         </div>
         <div class="warehouse-match" aria-label="Find best warehouse matches for current engine">
           <label>Best matches for current engine</label>
@@ -1100,7 +1110,8 @@ const appState = {
   theme: document.documentElement.dataset.theme || 'dark',
   graph: null,
   graphView: null,
-  warehouseEngineId: ''
+  warehouseEngineId: '',
+  dataVersion: 0
 };
 
 const PALETTE = [202, 156, 286, 42, 336, 118, 18, 224, 188, 258, 352, 82];
@@ -1142,6 +1153,9 @@ const warehouseStatusName = document.getElementById('warehouse-status-name');
 const warehouseStatusMeta = document.getElementById('warehouse-status-meta');
 const warehouseMetrics = document.getElementById('warehouse-metrics');
 const warehouseAggregateResults = document.getElementById('warehouse-aggregate-results');
+const warehouseExportButton = document.getElementById('warehouse-export-button');
+const warehouseImportButton = document.getElementById('warehouse-import-button');
+const warehouseImportInput = document.getElementById('warehouse-import-input');
 const warehouseMatchName = document.getElementById('warehouse-match-name');
 const warehouseMatchMeta = document.getElementById('warehouse-match-meta');
 const warehouseMatchButton = document.getElementById('warehouse-match-button');
@@ -1312,6 +1326,20 @@ function pairwiseWarehouseSpread(records){
   return { pairCount, mostSimilar, mostDistinct };
 }
 
+function warehouseReadiness(records){
+  const counts = { candidate_count: 0, usable_count: 0, current_count: 0, stale_count: 0, recomputable_count: 0, skipped_count: 0 };
+  for (const record of records || []) {
+    counts.candidate_count++;
+    const validation = validateWarehouseRecord(record);
+    if (validation.status === 'current') counts.current_count++;
+    if (validation.status === 'stale') counts.stale_count++;
+    if (validation.status === 'recomputable') counts.recomputable_count++;
+    if (validation.status === 'unusable') counts.skipped_count++;
+    if (['current', 'stale', 'recomputable'].includes(validation.status)) counts.usable_count++;
+  }
+  return counts;
+}
+
 function computeWarehouseAggregate(records){
   const engines = Array.isArray(records) ? records : [];
   const totals = { cells: 0, formulas: 0, sourceTabs: 0, runs: 0, namedRanges: 0, metricRows: 0 };
@@ -1340,8 +1368,10 @@ function computeWarehouseAggregate(records){
   const complexity = bestRecordBy(engines, recordComplexityScore);
   const risk = bestRecordBy(engines, recordRiskScore);
   const spread = pairwiseWarehouseSpread(engines);
+  const readiness = warehouseReadiness(engines);
   return {
     engine_count: engineCount,
+    readiness,
     totals,
     averages: {
       cells_per_engine: engineCount ? totals.cells / engineCount : 0,
@@ -1387,6 +1417,9 @@ function renderWarehouseAggregate(records){
     ['Engines', summary.engine_count],
     ['Avg formulas', summary.averages.formulas_per_engine],
     ['Avg cells', summary.averages.cells_per_engine],
+    ['Usable', `${summary.readiness.usable_count}/${summary.readiness.candidate_count}`],
+    ['Stale', summary.readiness.stale_count + summary.readiness.recomputable_count],
+    ['Skipped', summary.readiness.skipped_count],
     ['Depth range', `${summary.structural_complexity_range.min_depth}-${summary.structural_complexity_range.max_depth}`],
     ['Benefit domains', formatTopCounts(Object.fromEntries(summary.common_benefit_domains.map(item => [item.name, item.count])), 8)],
     ['Functions', formatTopCounts(Object.fromEntries(summary.common_functions.map(item => [item.name, item.count])), 8)],
@@ -1454,8 +1487,32 @@ function renderWarehouseComparison(report){
   for (const [label, value] of tiles) warehouseCompareResults.appendChild(metricTile(label, value));
 }
 
+const currentMetricCache = { dataVersion: -1, metrics: null, hits: 0, misses: 0 };
+
 function currentEngineWarehouseMetrics(){
-  return computeEngineMetrics(DATA, datasetDisplayName(DATA, 'current'));
+  if (currentMetricCache.metrics && currentMetricCache.dataVersion === appState.dataVersion) {
+    currentMetricCache.hits++;
+    return currentMetricCache.metrics;
+  }
+  currentMetricCache.misses++;
+  currentMetricCache.dataVersion = appState.dataVersion;
+  currentMetricCache.metrics = computeEngineMetrics(DATA, datasetDisplayName(DATA, 'current'));
+  return currentMetricCache.metrics;
+}
+
+function resetCurrentMetricCache(){
+  currentMetricCache.dataVersion = -1;
+  currentMetricCache.metrics = null;
+}
+
+function warehouseDebugStats(){
+  return {
+    currentMetricCache: {
+      dataVersion: currentMetricCache.dataVersion,
+      hits: currentMetricCache.hits,
+      misses: currentMetricCache.misses
+    }
+  };
 }
 
 function componentEvidenceFromReport(report, direction='similar', limit=3){
@@ -1806,6 +1863,19 @@ async function importWarehouseBundle(input, options={}){
   };
 }
 
+function downloadWarehouseBundle(bundle){
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `pbgc-v1-warehouse-${new Date().toISOString().slice(0, 10)}.json`;
+  window.lastWarehouseDownloadName = a.download;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 async function rankMatchesForCurrentEngine(options={}){
   const rawRecords = await warehouseGetAll();
   const prepared = await prepareWarehouseRecordsForRanking(rawRecords);
@@ -1979,6 +2049,7 @@ async function refreshWarehouseList(selectedId=''){
     if (warehouseLoadButton) warehouseLoadButton.disabled = true;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = true;
     if (warehouseMatchButton) warehouseMatchButton.disabled = true;
+    if (warehouseExportButton) warehouseExportButton.disabled = true;
     renderWarehouseAggregate([]);
     renderWarehouseCompareOptions([]);
     renderWarehouseMatches([]);
@@ -2009,6 +2080,7 @@ async function refreshWarehouseList(selectedId=''){
     if (warehouseLoadButton) warehouseLoadButton.disabled = !hasSelection;
     if (warehouseDeleteButton) warehouseDeleteButton.disabled = !hasSelection;
     if (warehouseMatchButton) warehouseMatchButton.disabled = !records.length;
+    if (warehouseExportButton) warehouseExportButton.disabled = !records.length;
     renderWarehouseMetrics(records.find(record => record.id === nextId) || null);
     renderWarehouseAggregate(records);
     renderWarehouseCompareOptions(records, warehouseCompareA?.value || nextId, warehouseCompareB?.value || '');
@@ -2024,6 +2096,7 @@ async function refreshWarehouseList(selectedId=''){
     renderWarehouseCompareOptions([]);
     renderWarehouseMatches([]);
     if (warehouseMatchButton) warehouseMatchButton.disabled = true;
+    if (warehouseExportButton) warehouseExportButton.disabled = true;
     updateWarehouseStatus('Warehouse error', 'Could not read stored engines.');
     return [];
   }
@@ -2074,6 +2147,8 @@ function applyLoadedSummary(rawSummary, sourceName, options={}){
   appState.rootCell = null;
   appState.inspectCell = null;
   appState.warehouseEngineId = options.engineId || '';
+  appState.dataVersion++;
+  resetCurrentMetricCache();
   updateUploadStatus(datasetDisplayName(DATA, sourceName), datasetDisplayMeta(DATA));
   refreshAll();
   return DATA;
@@ -2091,6 +2166,8 @@ window.engineWarehouse = {
   exportBundle: exportWarehouseBundle,
   importBundle: importWarehouseBundle,
   clear: warehouseClear,
+  readiness: warehouseReadiness,
+  debugStats: warehouseDebugStats,
   delete: deleteWarehouseEngine,
   getAll: warehouseGetAll,
   get: warehouseGet
@@ -4292,6 +4369,38 @@ if (warehouseMatchButton) {
       console.error(error);
       renderWarehouseMatches([]);
       updateWarehouseMatchStatus('Match failed', 'Could not rank stored engines against the current engine.');
+    }
+  });
+}
+
+if (warehouseExportButton) {
+  warehouseExportButton.addEventListener('click', async () => {
+    try {
+      const bundle = await exportWarehouseBundle();
+      window.lastWarehouseExportBundle = bundle;
+      downloadWarehouseBundle(bundle);
+      updateWarehouseStatus('Warehouse exported', `${bundle.record_count} records in bundle.`);
+    } catch (error) {
+      console.error(error);
+      updateWarehouseStatus('Export failed', 'Could not export warehouse bundle.');
+    }
+  });
+}
+
+if (warehouseImportButton && warehouseImportInput) {
+  warehouseImportButton.addEventListener('click', () => warehouseImportInput.click());
+  warehouseImportInput.addEventListener('change', async () => {
+    const file = warehouseImportInput.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const result = await importWarehouseBundle(text);
+      updateWarehouseStatus('Warehouse imported', `${result.imported_count} imported, ${result.skipped_count} skipped.`);
+    } catch (error) {
+      console.error(error);
+      updateWarehouseStatus('Import failed', 'Could not import warehouse bundle.');
+    } finally {
+      warehouseImportInput.value = '';
     }
   });
 }

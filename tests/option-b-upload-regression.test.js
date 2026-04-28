@@ -1157,6 +1157,208 @@ test('warehouse export and import round trip preserves ranking evidence', { time
   assert.ok(payload.checks.importDiagnostics.every(status => status === 'current'));
 });
 
+test('warehouse drawer import/export controls and readiness indicators are wired', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const valid = {
+    schema_version: 'warehouse-controls',
+    engine_name: 'Controls Valid',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: { Separated: { runs: ['XRD'], cells: { A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } }, B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } } }, formulas: { A1: { cell: 'A1', formula: 'ROUND(B1,2)', refs: ['B1'], functions: ['ROUND'] } } } },
+    namedRanges: []
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function tiles(){
+    return Array.from(document.querySelectorAll('#warehouse-aggregate-results .metric-tile')).map(tile => ({
+      label: tile.querySelector('.metric-label')?.textContent || '',
+      value: tile.querySelector('.metric-value')?.textContent || ''
+    }));
+  }
+  async function waitFor(predicate, timeoutMs = 5000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await predicate()) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return false;
+  }
+  try {
+    const record = await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(valid)}), 'controls-valid.json');
+    await engineWarehouse.putRaw({ id: 'controls-stale', displayName: 'Controls Stale', sourceName: 'controls-stale.json', summary: normalizeSummary(${JSON.stringify(valid)}), metrics: { ...record.metrics, metric_version: 'v0.1' }, metricVersion: 'v0.1' });
+    await engineWarehouse.putRaw({ id: 'controls-unusable', displayName: 'Controls Unusable' });
+    await engineWarehouse.refresh();
+    const beforeExportDisabled = document.getElementById('warehouse-export-button').disabled;
+    const readiness = engineWarehouse.readiness(await engineWarehouse.getAll());
+    URL.createObjectURL = () => 'blob:test';
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function(){ window.__downloadClicked = true; };
+    document.getElementById('warehouse-export-button').click();
+    await waitFor(() => !!window.lastWarehouseExportBundle);
+    result.ok = true;
+    result.checks = {
+      exportDisabled: beforeExportDisabled,
+      lastBundleCount: window.lastWarehouseExportBundle?.record_count || 0,
+      statusName: document.getElementById('warehouse-status-name').textContent,
+      readiness,
+      tiles: tiles()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-controls-');
+
+  assert.equal(payload.checks.exportDisabled, false);
+  assert.equal(payload.checks.lastBundleCount, 2);
+  assert.equal(payload.checks.statusName, 'Warehouse exported');
+  assert.equal(payload.checks.readiness.candidate_count, 3);
+  assert.equal(payload.checks.readiness.usable_count, 2);
+  assert.equal(payload.checks.readiness.stale_count, 1);
+  assert.equal(payload.checks.readiness.skipped_count, 1);
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Usable' && tile.value === '2/3'));
+  assert.ok(payload.checks.tiles.some(tile => tile.label === 'Skipped' && tile.value === '1'));
+});
+
+test('warehouse ranking scales deterministically across synthetic 100-engine library', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const injection = `
+<script>
+(function(){
+  const result = { ok: false, checks: {} };
+  function summary(i){
+    const close = i === 0;
+    const field = close ? 'NORMAL_RETIREMENT_BENEFIT' : (i % 3 === 0 ? 'QPSA_LUMP_SUM_BENEFIT' : 'EARLY_RETIREMENT_BENEFIT');
+    const fn = close ? 'NPVF2' : (i % 2 === 0 ? 'QPSAPVF' : 'ROUND');
+    return {
+      schema_version: 'synthetic-scale',
+      engine_name: close ? 'Synthetic Best' : 'Synthetic ' + String(i).padStart(3, '0'),
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: { Separated: { runs: ['XRD'], cells: {
+        A1: { cell: 'A1', genericField: field, description: field.replaceAll('_', ' '), hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+        B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } },
+        C1: { cell: 'C1', genericField: 'CREDITED_SERVICE', description: 'Credited service input', hasFormula: false, runs: { XRD: { field: 'CREDITED_SERVICE', iob: 'I' } } }
+      }, formulas: { A1: { cell: 'A1', formula: close ? 'NPVF2(B1*C1,Plan_Int)' : fn + '(B1*C1)', refs: close ? ['B1', 'C1', 'Plan_Int'] : ['B1', 'C1'], functions: [fn] } } } },
+      namedRanges: close ? ['Plan_Int'] : []
+    };
+  }
+  try {
+    const target = normalizeSummary(summary(0));
+    const targetMetrics = computeEngineMetrics(target, 'TARGET');
+    const records = [];
+    for (let i = 0; i < 100; i++) {
+      const normalized = normalizeSummary(summary(i));
+      const metrics = computeEngineMetrics(normalized, 'REC_' + i);
+      records.push({ id: 'rec-' + String(i).padStart(3, '0'), displayName: normalized.engine_name, sourceName: normalized.engine_name + '.json', metrics, metricVersion: 'v0.7', summary: normalized, counts: { cells: Object.keys(normalized.cells).length, formulas: Object.keys(normalized.formulas).length, sourceTabs: normalized.sourceTabs.length, runs: normalized.runs.length, namedRanges: normalized.namedRanges.length, metricRows: metrics.rows.length } });
+    }
+    const start = performance.now();
+    const matches = engineWarehouse.rankMatchesForMetrics(targetMetrics, records, { limit: 10 });
+    const duration = performance.now() - start;
+    const repeat = engineWarehouse.rankMatchesForMetrics(targetMetrics, records, { limit: 10 });
+    result.ok = true;
+    result.checks = {
+      duration,
+      count: matches.length,
+      first: matches[0].engine_name,
+      firstSimilarity: matches[0].overall_similarity,
+      sameOrder: matches.map(m => m.engine_id).join('|') === repeat.map(m => m.engine_id).join('|')
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-scale-');
+
+  assert.equal(payload.checks.count, 10);
+  assert.equal(payload.checks.first, 'Synthetic Best');
+  assert.ok(payload.checks.firstSimilarity > 0.99);
+  assert.equal(payload.checks.sameOrder, true);
+  assert.ok(payload.checks.duration < 5000, `ranking took ${payload.checks.duration}ms`);
+});
+
+test('warehouse current metric cache is reused for repeated current-engine rankings', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const summary = {
+    schema_version: 'cache-test',
+    engine_name: 'Cache Test',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: { Separated: { runs: ['XRD'], cells: { A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } }, B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Compensation', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } } }, formulas: { A1: { cell: 'A1', formula: 'ROUND(B1,2)', refs: ['B1'], functions: ['ROUND'] } } } },
+    namedRanges: []
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  try {
+    applyLoadedSummary(${JSON.stringify(summary)}, 'cache-current.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(summary)}), 'cache-candidate.json');
+    await engineWarehouse.refresh();
+    const first = await engineWarehouse.rankMatchesForCurrent({ limit: 1 });
+    const afterFirst = engineWarehouse.debugStats().currentMetricCache;
+    const second = await engineWarehouse.rankMatchesForCurrent({ limit: 1 });
+    const afterSecond = engineWarehouse.debugStats().currentMetricCache;
+    result.ok = true;
+    result.checks = {
+      firstOrder: first.map(m => m.engine_id).join('|'),
+      secondOrder: second.map(m => m.engine_id).join('|'),
+      missesAfterFirst: afterFirst.misses,
+      hitsAfterSecond: afterSecond.hits,
+      missesAfterSecond: afterSecond.misses
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'warehouse-cache-');
+
+  assert.equal(payload.checks.firstOrder, payload.checks.secondOrder);
+  assert.ok(payload.checks.missesAfterFirst >= 1);
+  assert.ok(payload.checks.hitsAfterSecond >= 1);
+  assert.equal(payload.checks.missesAfterSecond, payload.checks.missesAfterFirst);
+});
+
 test('run selection does not borrow formulas from cells missing that run entry', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {

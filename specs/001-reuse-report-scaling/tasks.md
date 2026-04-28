@@ -24,29 +24,29 @@
 - [x] T011 [US4] Define `WarehouseBundle` JSON shape with bundle schema version, records, timestamps, and validation metadata.
 - [x] T012 [US4] Implement warehouse export function returning a deterministic JSON bundle.
 - [x] T013 [US4] Implement warehouse import validation and restore behavior.
-- [ ] T014 [US4] Add minimal drawer controls for export/import if they fit the existing UI; otherwise expose public browser functions first.
+- [x] T014 [US4] Add minimal drawer controls for export/import if they fit the existing UI; otherwise expose public browser functions first.
 - [x] T015 [US4] Add export/import round-trip regression test verifying ranking equivalence before and after restore.
 
 ## Phase 4: Scaling and Caching
 
-- [ ] T016 [US5] Add deterministic synthetic warehouse fixture generator in the test harness.
-- [ ] T017 [US5] Add 100-engine ranking performance regression with an explicit time budget.
-- [ ] T018 [US5] Cache current-engine metrics for repeated ranking requests until the loaded summary changes.
-- [ ] T019 [US5] Avoid recomputing candidate metrics when stored records already contain current metric-version data.
-- [ ] T020 [US5] Add repeated-ranking test verifying identical order/scores and reduced recomputation path.
+- [x] T016 [US5] Add deterministic synthetic warehouse fixture generator in the test harness.
+- [x] T017 [US5] Add 100-engine ranking performance regression with an explicit time budget.
+- [x] T018 [US5] Cache current-engine metrics for repeated ranking requests until the loaded summary changes.
+- [x] T019 [US5] Avoid recomputing candidate metrics when stored records already contain current metric-version data.
+- [x] T020 [US5] Add repeated-ranking test verifying identical order/scores and reduced recomputation path.
 
 ## Phase 5: Warehouse Aggregate Readiness
 
-- [ ] T021 [US2] Extend aggregate analysis to include migration/staleness counts.
-- [ ] T022 [US2] Add aggregate indicator for warehouse reuse readiness: candidate count, usable count, stale count, skipped count.
-- [ ] T023 [US2] Add regression coverage for aggregate readiness with mixed valid/stale/unusable records.
+- [x] T021 [US2] Extend aggregate analysis to include migration/staleness counts.
+- [x] T022 [US2] Add aggregate indicator for warehouse reuse readiness: candidate count, usable count, stale count, skipped count.
+- [x] T023 [US2] Add regression coverage for aggregate readiness with mixed valid/stale/unusable records.
 
 ## Phase 6: Documentation and Review
 
-- [ ] T024 Update `README.md` or `docs/` with the warehouse reuse workflow and limitations.
-- [ ] T025 Document that R5/provision-state-machine integration is deferred until paired R5/V1 evidence exists.
-- [ ] T026 Run `node --test tests\option-b-upload-regression.test.js`.
-- [ ] T027 Commit and push the implementation branch after tests pass.
+- [x] T024 Update `README.md` or `docs/` with the warehouse reuse workflow and limitations.
+- [x] T025 Document that R5/provision-state-machine integration is deferred until paired R5/V1 evidence exists.
+- [x] T026 Run `node --test tests\option-b-upload-regression.test.js`.
+- [x] T027 Commit and push the implementation branch after tests pass.
 
 ## Dependencies
 
