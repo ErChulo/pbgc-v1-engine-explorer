@@ -649,10 +649,7 @@ test('Option B JSON upload scopes source tab/run and keeps tree toggle local', {
   assert.deepEqual(beforeToggle.graph, [
     'BDOB',
     'Tab: Beneficiaries in Pay',
-    'AA2',
-    'ZZZ_BDOB_CHECK',
-    'Tab: Beneficiaries in Pay',
-    'AB2'
+    'AA2'
   ]);
   assert.equal(afterToggle.root, beforeToggle.root);
   assert.deepEqual(afterToggle.graph, beforeToggle.graph);

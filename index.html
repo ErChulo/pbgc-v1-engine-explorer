@@ -1154,8 +1154,8 @@ let DATA = normalizeSummary(EMBEDDED_DATA);
 const appState = {
   run: DATA.runs.includes('XRD') ? 'XRD' : (DATA.runs[0] || ''),
   sourceTab: DATA.sourceTabs?.[0] || '',
-  backwardDepth: 2,
-  forwardDepth: 2,
+  backwardDepth: 1,
+  forwardDepth: 0,
   rootCell: null,
   inspectCell: null,
   labelMode: 'cell', // cell or field
