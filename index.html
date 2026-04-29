@@ -298,6 +298,11 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
 .warehouse-match{display:grid;gap:8px;padding-top:2px}
 .warehouse-match-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
 .warehouse-match-results{display:grid;gap:6px}
+.r5-match{display:grid;gap:8px;padding-top:2px}
+.r5-upload-row{display:flex;flex-wrap:wrap;gap:8px}
+.r5-results{display:grid;gap:6px}
+.r5-profile-summary{display:grid;gap:4px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.r5-domain-list{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .match-card{display:grid;gap:5px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:10px;background:color-mix(in srgb, var(--panel-2) 62%, transparent)}
 .match-card .match-title{font-size:12px;font-weight:750;color:var(--text);overflow-wrap:anywhere}
 .match-card .match-meta{display:flex;flex-wrap:wrap;gap:6px;font-size:10px;color:var(--muted)}
@@ -707,6 +712,23 @@ body.drawer-open .drawer-overlay{opacity:1;pointer-events:auto}
             <button id="warehouse-match-button" class="mini-button" type="button" disabled>Find Matches</button>
           </div>
           <div id="warehouse-match-results" class="warehouse-match-results" aria-live="polite"></div>
+        </div>
+        <div class="r5-match" aria-label="Find V1 matches from R5 summaries">
+          <label>Find V1 from R5 summaries</label>
+          <div class="r5-upload-row">
+            <button id="r5-upload-button" class="mini-button" type="button">Choose R5 JSON</button>
+            <button id="r5-clear-button" class="mini-button" type="button" disabled>Clear R5</button>
+            <input id="r5-json-input" type="file" accept=".json,application/json" multiple hidden>
+          </div>
+          <div class="warehouse-match-row">
+            <div class="warehouse-status">
+              <div id="r5-status-name" class="name">No R5 case loaded</div>
+              <div id="r5-status-meta" class="meta">Upload plan-summary JSON files to rank reusable V1 engines.</div>
+            </div>
+            <button id="r5-match-button" class="mini-button" type="button" disabled>Rank V1s</button>
+          </div>
+          <div id="r5-profile-results" class="r5-results" aria-live="polite"></div>
+          <div id="r5-match-results" class="warehouse-match-results" aria-live="polite"></div>
         </div>
         <div class="warehouse-compare" aria-label="Compare stored engines">
           <label>Compare engines</label>
@@ -1174,6 +1196,8 @@ const appState = {
     gsapAvailableOverride: null
   },
   warehouseEngineId: '',
+  r5CaseProfile: null,
+  r5MatchReport: null,
   dataVersion: 0
 };
 
@@ -1226,6 +1250,14 @@ const warehouseMatchName = document.getElementById('warehouse-match-name');
 const warehouseMatchMeta = document.getElementById('warehouse-match-meta');
 const warehouseMatchButton = document.getElementById('warehouse-match-button');
 const warehouseMatchResults = document.getElementById('warehouse-match-results');
+const r5UploadButton = document.getElementById('r5-upload-button');
+const r5ClearButton = document.getElementById('r5-clear-button');
+const r5JsonInput = document.getElementById('r5-json-input');
+const r5StatusName = document.getElementById('r5-status-name');
+const r5StatusMeta = document.getElementById('r5-status-meta');
+const r5MatchButton = document.getElementById('r5-match-button');
+const r5ProfileResults = document.getElementById('r5-profile-results');
+const r5MatchResults = document.getElementById('r5-match-results');
 const warehouseCompareA = document.getElementById('warehouse-compare-a');
 const warehouseCompareB = document.getElementById('warehouse-compare-b');
 const warehouseCompareButton = document.getElementById('warehouse-compare-button');
@@ -1793,6 +1825,307 @@ function renderWarehouseMatches(matches){
   });
 }
 
+const R5_PROFILE_VERSION = 'r5-proxy-v0.1';
+const R5_LOW_CONFIDENCE_THRESHOLD = 0.35;
+
+function updateR5Status(nameText, metaText){
+  if (r5StatusName) r5StatusName.textContent = nameText;
+  if (r5StatusMeta) r5StatusMeta.textContent = metaText;
+}
+
+function collectJsonTextBlocks(value, path='', out=[]){
+  if (value == null) return out;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = String(value).trim();
+    if (text) out.push({ path, text });
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectJsonTextBlocks(item, `${path}[${index}]`, out));
+    return out;
+  }
+  if (typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      collectJsonTextBlocks(item, path ? `${path}.${key}` : key, out);
+    }
+  }
+  return out;
+}
+
+function addR5DomainEvidence(profile, domain, sourceName, text){
+  profile.domain_counts[domain] = (profile.domain_counts[domain] || 0) + 1;
+  if (!profile.domain_evidence[domain]) profile.domain_evidence[domain] = [];
+  if (profile.domain_evidence[domain].length < 4) {
+    profile.domain_evidence[domain].push({ source: sourceName, text: String(text || '').slice(0, 160) });
+  }
+}
+
+function extractR5UploadProfile(rawSummary, sourceName){
+  const blocks = collectJsonTextBlocks(rawSummary).slice(0, 1200);
+  const upload = {
+    source_name: sourceName,
+    parse_status: 'valid',
+    recognized_text_blocks: blocks,
+    benefit_domain_hits: {},
+    token_counts: {},
+    evidence_count: 0,
+    warnings: []
+  };
+  for (const block of blocks) {
+    const text = `${block.path} ${block.text}`;
+    const domains = benefitDomainsForText(text);
+    const tokens = tokenizeText(text);
+    for (const token of tokens) upload.token_counts[token] = (upload.token_counts[token] || 0) + 1;
+    for (const domain of domains) {
+      upload.benefit_domain_hits[domain] = upload.benefit_domain_hits[domain] || [];
+      if (upload.benefit_domain_hits[domain].length < 3) {
+        upload.benefit_domain_hits[domain].push({ source: sourceName, text: block.text.slice(0, 160) });
+      }
+      upload.evidence_count++;
+    }
+  }
+  if (!Object.keys(upload.benefit_domain_hits).length) {
+    upload.warnings.push(`${sourceName}: no recognized benefit/provision domains found.`);
+  }
+  return upload;
+}
+
+function mergeR5CaseProfiles(uploads){
+  const profile = {
+    profile_version: R5_PROFILE_VERSION,
+    source_names: [],
+    source_count: 0,
+    benefit_domain_coverage: [],
+    domain_counts: {},
+    domain_evidence: {},
+    token_counts: {},
+    recognized_evidence_count: 0,
+    confidence: 0,
+    warnings: []
+  };
+  for (const upload of uploads || []) {
+    if (upload.parse_status !== 'valid') {
+      profile.warnings.push(...(upload.warnings || []));
+      continue;
+    }
+    profile.source_names.push(upload.source_name);
+    profile.source_count++;
+    profile.recognized_evidence_count += Number(upload.evidence_count || 0);
+    addCounts(profile.token_counts, upload.token_counts);
+    for (const [domain, evidenceItems] of Object.entries(upload.benefit_domain_hits || {})) {
+      for (const evidence of evidenceItems) addR5DomainEvidence(profile, domain, evidence.source, evidence.text);
+    }
+    profile.warnings.push(...(upload.warnings || []));
+  }
+  profile.benefit_domain_coverage = Object.keys(profile.domain_counts).sort();
+  const domainScore = Math.min(1, profile.benefit_domain_coverage.length / 8);
+  const sourceScore = Math.min(1, profile.source_count / 3);
+  const evidenceScore = Math.min(1, profile.recognized_evidence_count / 18);
+  profile.confidence = clamp01(domainScore * 0.60 + evidenceScore * 0.30 + sourceScore * 0.10);
+  if (!profile.source_count) profile.warnings.push('No valid R5 summaries were loaded.');
+  if (profile.confidence < R5_LOW_CONFIDENCE_THRESHOLD) profile.warnings.push('Low confidence: limited recognized R5 benefit/provision evidence.');
+  return profile;
+}
+
+function projectV1CandidateProfile(record){
+  const benefit = record?.metrics?.benefit_architecture_metrics || {};
+  const domainCounts = benefit.domain_counts || {};
+  const domainSet = benefit.domain_set || Object.keys(domainCounts).sort();
+  return {
+    engine_id: record?.id || '',
+    engine_name: record?.displayName || record?.sourceName || record?.id || 'Stored V1 engine',
+    source_name: record?.sourceName || '',
+    metric_version: record?.metricVersion || record?.metrics?.metric_version || '',
+    benefit_domain_coverage: domainSet.slice().sort(),
+    domain_counts: domainCounts,
+    domain_evidence: Object.fromEntries(domainSet.map(domain => [domain, [{ source: record?.sourceName || '', text: domain }]]))
+  };
+}
+
+function computeR5CandidateMatch(caseProfile, candidateProfile){
+  const r5Domains = caseProfile.benefit_domain_coverage || [];
+  const candidateDomains = candidateProfile.benefit_domain_coverage || [];
+  const matched = r5Domains.filter(domain => candidateDomains.includes(domain)).sort();
+  const missing = r5Domains.filter(domain => !candidateDomains.includes(domain)).sort();
+  const extras = candidateDomains.filter(domain => !r5Domains.includes(domain)).sort();
+  const domainSimilarity = 1 - setDistance(r5Domains, candidateDomains);
+  const frequencySimilarity = 1 - vectorDistance(caseProfile.domain_counts || {}, candidateProfile.domain_counts || {});
+  const reuseSimilarity = clamp01(domainSimilarity * 0.75 + frequencySimilarity * 0.25);
+  const topEvidence = matched.slice(0, 4).map(domain => {
+    const evidence = caseProfile.domain_evidence?.[domain]?.[0];
+    return evidence ? `${domain}: ${evidence.text}` : `${domain}: matched benefit domain`;
+  });
+  const warnings = [];
+  if ((caseProfile.confidence || 0) < R5_LOW_CONFIDENCE_THRESHOLD) warnings.push('Low R5 evidence confidence; review manually before reuse.');
+  if (!matched.length) warnings.push('No benefit domains overlapped with the R5 case profile.');
+  return {
+    engine_id: candidateProfile.engine_id,
+    engine_name: candidateProfile.engine_name,
+    source_name: candidateProfile.source_name,
+    reuse_similarity: reuseSimilarity,
+    confidence: clamp01(caseProfile.confidence || 0),
+    matched_domains: matched,
+    missing_from_candidate: missing,
+    candidate_extra_domains: extras,
+    top_evidence: topEvidence,
+    warnings
+  };
+}
+
+function rankV1CandidatesForR5Profile(caseProfile, records, options={}){
+  const matches = [];
+  for (const record of records || []) {
+    const candidateProfile = projectV1CandidateProfile(record);
+    const match = computeR5CandidateMatch(caseProfile, candidateProfile);
+    matches.push(match);
+  }
+  matches.sort((a, b) =>
+    b.reuse_similarity - a.reuse_similarity
+    || b.confidence - a.confidence
+    || String(a.engine_name).localeCompare(String(b.engine_name))
+    || String(a.engine_id).localeCompare(String(b.engine_id))
+  );
+  return matches.slice(0, options.limit || 5).map((match, index) => ({ ...match, rank: index + 1 }));
+}
+
+function renderR5Profile(profile){
+  if (!r5ProfileResults) return;
+  r5ProfileResults.innerHTML = '';
+  if (!profile) return;
+  const card = document.createElement('div');
+  card.className = 'r5-profile-summary';
+  const title = document.createElement('div');
+  title.className = 'match-title';
+  title.textContent = `${profile.source_count} R5 ${profile.source_count === 1 ? 'summary' : 'summaries'} merged`;
+  const meta = document.createElement('div');
+  meta.className = 'match-meta';
+  meta.textContent = `Confidence ${scorePercent(profile.confidence)} · ${profile.recognized_evidence_count} evidence hits`;
+  const domains = document.createElement('div');
+  domains.className = 'r5-domain-list';
+  domains.textContent = profile.benefit_domain_coverage.length ? `Domains: ${profile.benefit_domain_coverage.join(', ')}` : 'Domains: none recognized';
+  card.appendChild(title);
+  card.appendChild(meta);
+  card.appendChild(domains);
+  if (profile.warnings.length) {
+    const warning = document.createElement('div');
+    warning.className = 'match-warning';
+    warning.textContent = profile.warnings[0];
+    card.appendChild(warning);
+  }
+  r5ProfileResults.appendChild(card);
+}
+
+function renderR5Matches(matches){
+  if (!r5MatchResults) return;
+  r5MatchResults.innerHTML = '';
+  if (!matches || !matches.length) {
+    const empty = document.createElement('div');
+    empty.className = 'match-card';
+    const title = document.createElement('div');
+    title.className = 'match-title';
+    title.textContent = 'No R5 reuse candidates';
+    const body = document.createElement('div');
+    body.className = 'match-diff';
+    body.textContent = 'Store usable V1 engines in the warehouse, then rank again.';
+    empty.appendChild(title);
+    empty.appendChild(body);
+    r5MatchResults.appendChild(empty);
+    return;
+  }
+  for (const match of matches) {
+    const card = document.createElement('div');
+    card.className = 'match-card';
+    const title = document.createElement('div');
+    title.className = 'match-title';
+    title.textContent = `${match.rank}. ${match.engine_name}`;
+    const meta = document.createElement('div');
+    meta.className = 'match-meta';
+    meta.innerHTML = `<span>Reuse similarity ${scorePercent(match.reuse_similarity)}</span><span>Confidence ${scorePercent(match.confidence)}</span>`;
+    const matched = document.createElement('div');
+    matched.className = 'match-evidence';
+    matched.textContent = match.matched_domains.length ? `Matched: ${match.matched_domains.slice(0, 8).join(', ')}` : 'Matched: none';
+    const missing = document.createElement('div');
+    missing.className = 'match-diff';
+    missing.textContent = match.missing_from_candidate.length ? `Missing in candidate: ${match.missing_from_candidate.slice(0, 8).join(', ')}` : 'Missing in candidate: none';
+    const evidence = document.createElement('div');
+    evidence.className = 'match-evidence';
+    evidence.textContent = match.top_evidence.length ? `Evidence: ${match.top_evidence[0]}` : 'Evidence: no domain overlap';
+    const warning = document.createElement('div');
+    warning.className = 'match-warning';
+    warning.textContent = match.warnings.length ? `Review: ${match.warnings[0]}` : 'Review: reuse candidate only, not an approval decision';
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.appendChild(matched);
+    card.appendChild(missing);
+    card.appendChild(evidence);
+    card.appendChild(warning);
+    r5MatchResults.appendChild(card);
+  }
+}
+
+async function loadR5CaseFiles(files){
+  const uploads = [];
+  for (const file of Array.from(files || [])) {
+    try {
+      const parsed = JSON.parse(await file.text());
+      uploads.push(extractR5UploadProfile(parsed, file.name || 'R5 summary'));
+    } catch (error) {
+      uploads.push({
+        source_name: file.name || 'R5 summary',
+        parse_status: 'invalid',
+        warnings: [`${file.name || 'R5 summary'}: invalid JSON.`]
+      });
+    }
+  }
+  appState.r5CaseProfile = mergeR5CaseProfiles(uploads);
+  appState.r5MatchReport = null;
+  renderR5Profile(appState.r5CaseProfile);
+  renderR5Matches([]);
+  if (r5MatchButton) r5MatchButton.disabled = !appState.r5CaseProfile.source_count;
+  if (r5ClearButton) r5ClearButton.disabled = !appState.r5CaseProfile.source_count;
+  updateR5Status(
+    appState.r5CaseProfile.source_count ? 'R5 case profile ready' : 'No valid R5 summaries',
+    `${appState.r5CaseProfile.source_count} valid file${appState.r5CaseProfile.source_count === 1 ? '' : 's'} · confidence ${scorePercent(appState.r5CaseProfile.confidence)}`
+  );
+  return appState.r5CaseProfile;
+}
+
+async function rankR5CaseAgainstWarehouse(options={}){
+  if (!appState.r5CaseProfile) throw new Error('No R5 case profile loaded.');
+  const beforeCount = (await warehouseGetAll()).length;
+  const prepared = await prepareWarehouseRecordsForRanking(await warehouseGetAll());
+  const matches = rankV1CandidatesForR5Profile(appState.r5CaseProfile, prepared.records, { limit: options.limit || 5 });
+  const afterCount = (await warehouseGetAll()).length;
+  appState.r5MatchReport = {
+    profile_version: R5_PROFILE_VERSION,
+    metric_version: CURRENT_METRIC_VERSION,
+    ranked_at: 'deterministic-local',
+    source_names: appState.r5CaseProfile.source_names,
+    matches,
+    warnings: [...appState.r5CaseProfile.warnings],
+    warehouse_count_before: beforeCount,
+    warehouse_count_after: afterCount
+  };
+  if (beforeCount !== afterCount) appState.r5MatchReport.warnings.push('Warehouse count changed during R5 ranking.');
+  renderR5Matches(matches);
+  updateR5Status(
+    matches.length ? `${matches.length} V1 reuse candidate${matches.length === 1 ? '' : 's'}` : 'No V1 candidates',
+    matches.length ? `Best reuse similarity: ${scorePercent(matches[0].reuse_similarity)} · confidence ${scorePercent(matches[0].confidence)}` : 'Store usable V1 engines in the warehouse first.'
+  );
+  return appState.r5MatchReport;
+}
+
+function clearR5CaseProfile(){
+  appState.r5CaseProfile = null;
+  appState.r5MatchReport = null;
+  if (r5JsonInput) r5JsonInput.value = '';
+  if (r5MatchButton) r5MatchButton.disabled = true;
+  if (r5ClearButton) r5ClearButton.disabled = true;
+  if (r5ProfileResults) r5ProfileResults.innerHTML = '';
+  renderR5Matches([]);
+  updateR5Status('No R5 case loaded', 'Upload plan-summary JSON files to rank reusable V1 engines.');
+}
+
 function summarizeRecordCounts(summary){
   return {
     sourceTabs: (summary.sourceTabs || []).length,
@@ -2264,6 +2597,11 @@ window.engineWarehouse = {
   aggregate: computeWarehouseAggregate,
   rankMatchesForCurrent: rankMatchesForCurrentEngine,
   rankMatchesForMetrics: rankWarehouseMatchesForMetrics,
+  loadR5CaseFiles,
+  rankR5Case: rankR5CaseAgainstWarehouse,
+  clearR5Case: clearR5CaseProfile,
+  r5Profile: () => appState.r5CaseProfile,
+  r5Report: () => appState.r5MatchReport,
   exportBundle: exportWarehouseBundle,
   importBundle: importWarehouseBundle,
   clear: warehouseClear,
@@ -4819,6 +5157,34 @@ if (warehouseMatchButton) {
       updateWarehouseMatchStatus('Match failed', 'Could not rank stored engines against the current engine.');
     }
   });
+}
+
+if (r5UploadButton && r5JsonInput) {
+  r5UploadButton.addEventListener('click', () => r5JsonInput.click());
+  r5JsonInput.addEventListener('change', async () => {
+    try {
+      await loadR5CaseFiles(r5JsonInput.files || []);
+    } catch (error) {
+      console.error(error);
+      updateR5Status('R5 load failed', 'Could not parse the selected R5 JSON files.');
+    }
+  });
+}
+
+if (r5MatchButton) {
+  r5MatchButton.addEventListener('click', async () => {
+    try {
+      await rankR5CaseAgainstWarehouse();
+    } catch (error) {
+      console.error(error);
+      renderR5Matches([]);
+      updateR5Status('R5 match failed', 'Could not rank V1 engines for the R5 case profile.');
+    }
+  });
+}
+
+if (r5ClearButton) {
+  r5ClearButton.addEventListener('click', clearR5CaseProfile);
 }
 
 if (warehouseExportButton) {

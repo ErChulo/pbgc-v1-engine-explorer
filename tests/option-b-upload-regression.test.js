@@ -1311,6 +1311,192 @@ test('warehouse ranks stored engines as reuse candidates for current engine', { 
   assert.ok(payload.checks.cards.some(card => card.diff.includes('Top difference')));
 });
 
+test('R5 summaries merge into a temporary case profile and rank reusable V1 engines', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  function engine(engineName, field, description, formula, functions = []) {
+    return {
+      schema_version: 'r5-match-v1',
+      engine_name: engineName,
+      sourceTabs: ['Separated'],
+      runs: ['XRD'],
+      worksheets: {
+        Separated: {
+          runs: ['XRD'],
+          cells: {
+            A1: { cell: 'A1', genericField: field, description, hasFormula: true, runs: { XRD: { field, iob: 'O' } } },
+            B1: { cell: 'B1', genericField: 'COMPENSATION', description: 'Final average compensation input', hasFormula: false, runs: { XRD: { field: 'COMPENSATION', iob: 'I' } } }
+          },
+          formulas: { A1: { cell: 'A1', formula, refs: ['B1'], functions } }
+        }
+      },
+      namedRanges: ['Plan_Int']
+    };
+  }
+  const closeEngine = engine('QPSA Lump Sum Engine', 'QPSA_LUMP_SUM_BENEFIT', 'Qualified preretirement survivor annuity lump sum using mortality and interest', 'QPSAPVF(B1,Plan_Int)', ['QPSAPVF']);
+  const weakEngine = engine('Cash Balance Engine', 'CASH_BALANCE_ACCRUAL', 'Cash balance interest crediting formula', 'ROUND(B1,2)', ['ROUND']);
+  const r5A = {
+    plan_name: 'New Case',
+    historical_summary: 'The plan provides a qualified preretirement survivor annuity and beneficiary survivor benefit.',
+    provisions: [{ name: 'QPSA', text: 'QPSA present value uses mortality and plan interest assumptions.' }]
+  };
+  const r5B = {
+    provisions: [
+      { name: 'Lump sum', text: 'Lump sum option with annuity form conversion and actuarial equivalence.' },
+      { name: 'Compensation', text: 'Final average compensation and credited service define the benefit.' }
+    ]
+  };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  function cards(){
+    return Array.from(document.querySelectorAll('#r5-match-results .match-card')).map(card => ({
+      title: card.querySelector('.match-title')?.textContent || '',
+      meta: card.querySelector('.match-meta')?.textContent || '',
+      evidence: card.querySelector('.match-evidence')?.textContent || '',
+      diff: card.querySelector('.match-diff')?.textContent || '',
+      warning: card.querySelector('.match-warning')?.textContent || ''
+    }));
+  }
+  try {
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(closeEngine)}), 'qpsa-lump-v1.json');
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(weakEngine)}), 'cash-balance-v1.json');
+    await engineWarehouse.refresh();
+    const beforeCount = (await engineWarehouse.getAll()).length;
+    const files = [
+      new File([JSON.stringify(${JSON.stringify(r5A)})], 'r5-history-a.json', { type: 'application/json' }),
+      new File([JSON.stringify(${JSON.stringify(r5B)})], 'r5-history-b.json', { type: 'application/json' })
+    ];
+    const profile = await engineWarehouse.loadR5CaseFiles(files);
+    const report = await engineWarehouse.rankR5Case({ limit: 2 });
+    const afterCount = (await engineWarehouse.getAll()).length;
+    result.ok = true;
+    result.checks = {
+      beforeCount,
+      afterCount,
+      sourceCount: profile.source_count,
+      domains: profile.benefit_domain_coverage,
+      confidence: profile.confidence,
+      matchCount: report.matches.length,
+      firstName: report.matches[0].engine_name,
+      firstSimilarity: report.matches[0].reuse_similarity,
+      lastSimilarity: report.matches[report.matches.length - 1].reuse_similarity,
+      status: document.getElementById('r5-status-name').textContent,
+      profileText: document.getElementById('r5-profile-results').textContent,
+      cards: cards()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'r5-match-');
+
+  assert.equal(payload.checks.beforeCount, 2);
+  assert.equal(payload.checks.afterCount, 2);
+  assert.equal(payload.checks.sourceCount, 2);
+  assert.ok(payload.checks.domains.includes('qpsa'));
+  assert.ok(payload.checks.domains.includes('lump_sum'));
+  assert.ok(payload.checks.confidence > 0.4);
+  assert.equal(payload.checks.matchCount, 2);
+  assert.equal(payload.checks.firstName, 'qpsa-lump-v1.json');
+  assert.ok(payload.checks.firstSimilarity >= payload.checks.lastSimilarity);
+  assert.match(payload.checks.status, /V1 reuse candidate/);
+  assert.match(payload.checks.profileText, /R5 summaries merged/);
+  assert.match(payload.checks.cards[0].meta, /Reuse similarity/);
+  assert.match(payload.checks.cards[0].meta, /Confidence/);
+  assert.match(payload.checks.cards[0].evidence, /Matched:/);
+  assert.match(payload.checks.cards[0].diff, /Missing in candidate:/);
+});
+
+test('R5 matching exposes low-confidence and reset states without storing R5 records', { timeout: 30000 }, t => {
+  const browser = findBrowser();
+  if (!browser) {
+    t.skip('Chrome or Edge executable was not found');
+    return;
+  }
+
+  const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+  const validEngine = {
+    schema_version: 'r5-low-confidence-v1',
+    engine_name: 'Normal Retirement Engine',
+    sourceTabs: ['Separated'],
+    runs: ['XRD'],
+    worksheets: {
+      Separated: {
+        runs: ['XRD'],
+        cells: {
+          A1: { cell: 'A1', genericField: 'NORMAL_RETIREMENT_BENEFIT', description: 'Normal retirement benefit', hasFormula: true, runs: { XRD: { field: 'NORMAL_RETIREMENT_BENEFIT', iob: 'O' } } }
+        },
+        formulas: { A1: { cell: 'A1', formula: '1', refs: [], functions: [] } }
+      }
+    },
+    namedRanges: []
+  };
+  const weakR5 = { notes: 'Administrative cover page with no benefit provisions recognized.' };
+
+  const injection = `
+<script>
+(async function(){
+  const result = { ok: false, checks: {} };
+  try {
+    await engineWarehouse.putSummary(normalizeSummary(${JSON.stringify(validEngine)}), 'normal-retirement-v1.json');
+    await engineWarehouse.refresh();
+    const beforeCount = (await engineWarehouse.getAll()).length;
+    const profile = await engineWarehouse.loadR5CaseFiles([
+      new File([JSON.stringify(${JSON.stringify(weakR5)})], 'weak-r5.json', { type: 'application/json' })
+    ]);
+    const report = await engineWarehouse.rankR5Case({ limit: 1 });
+    const afterRankCount = (await engineWarehouse.getAll()).length;
+    engineWarehouse.clearR5Case();
+    const afterClearCount = (await engineWarehouse.getAll()).length;
+    result.ok = true;
+    result.checks = {
+      beforeCount,
+      afterRankCount,
+      afterClearCount,
+      confidence: profile.confidence,
+      warnings: profile.warnings,
+      reportWarnings: report.warnings,
+      clearStatus: document.getElementById('r5-status-name').textContent,
+      matchButtonDisabled: document.getElementById('r5-match-button').disabled,
+      profileEmpty: document.getElementById('r5-profile-results').textContent.trim()
+    };
+  } catch (error) {
+    result.error = String(error && error.stack || error);
+  }
+  const pre = document.createElement('pre');
+  pre.id = 'browser-check-result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
+})()
+</script>`;
+
+  const payload = runBrowserHarness(browser, indexHtml, injection, 'r5-low-confidence-');
+
+  assert.equal(payload.checks.beforeCount, 1);
+  assert.equal(payload.checks.afterRankCount, 1);
+  assert.equal(payload.checks.afterClearCount, 1);
+  assert.ok(payload.checks.confidence < 0.35);
+  assert.ok(payload.checks.warnings.some(message => /Low confidence/.test(message)));
+  assert.ok(payload.checks.reportWarnings.some(message => /Low confidence/.test(message)));
+  assert.equal(payload.checks.clearStatus, 'No R5 case loaded');
+  assert.equal(payload.checks.matchButtonDisabled, true);
+  assert.equal(payload.checks.profileEmpty, '');
+});
+
 test('warehouse match ranking handles empty, self-only, missing metrics, and ties', { timeout: 30000 }, t => {
   const browser = findBrowser();
   if (!browser) {
