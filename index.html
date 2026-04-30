@@ -1827,6 +1827,125 @@ function renderWarehouseMatches(matches){
 
 const R5_PROFILE_VERSION = 'r5-proxy-v0.1';
 const R5_LOW_CONFIDENCE_THRESHOLD = 0.35;
+const R5_EXCLUDED_RANKING_DOMAINS = new Set(['data_quality_assumptions']);
+const R5_DOMAIN_EVIDENCE_RULES = {
+  normal_retirement: {
+    strong: ['normal retirement', 'normal retirement date', 'normal retirement benefit', 'nrd'],
+    medium: ['age 65', 'normal form']
+  },
+  early_retirement: {
+    strong: ['early retirement', 'early retirement date', 'early retirement benefit', 'erd'],
+    medium: ['reduced early', 'early commencement']
+  },
+  late_retirement: {
+    strong: ['late retirement', 'late retirement benefit', 'deferred after normal', 'lrd'],
+    medium: ['post normal retirement', 'after normal retirement']
+  },
+  deferred_vested_retirement: {
+    strong: ['deferred vested', 'vested terminated', 'vested participant'],
+    medium: ['terminated vested', 'vested benefit']
+  },
+  in_pay_retiree_benefits: {
+    strong: ['in pay', 'in-pay', 'retiree benefits', 'retirees in pay'],
+    medium: ['retiree annuity', 'commenced benefit']
+  },
+  beneficiary_benefits: {
+    strong: ['beneficiary benefit', 'survivor benefit', 'spouse benefit', 'surviving spouse'],
+    medium: ['beneficiary', 'survivor', 'spouse']
+  },
+  alternate_payee_benefits: {
+    strong: ['alternate payee', 'qdro', 'domestic relations order'],
+    medium: ['ap benefit']
+  },
+  qjsa: {
+    strong: ['qjsa', 'qualified joint and survivor annuity'],
+    medium: ['joint and survivor', 'joint survivor']
+  },
+  qpsa: {
+    strong: ['qpsa', 'qualified preretirement survivor annuity'],
+    medium: ['preretirement survivor annuity']
+  },
+  preretirement_death_benefit: {
+    strong: ['preretirement death', 'pre-retirement death', 'death before retirement'],
+    medium: ['death before commencement', 'death before normal retirement']
+  },
+  postretirement_death_benefit: {
+    strong: ['postretirement death', 'post-retirement death', 'death after retirement'],
+    medium: ['death after commencement']
+  },
+  disability_benefit: {
+    strong: ['disability benefit', 'disabled participant', 'total disability'],
+    medium: ['disability pension']
+  },
+  lump_sum: {
+    strong: ['lump sum', 'single sum', 'cashout', 'cash-out'],
+    medium: ['present value payment']
+  },
+  annuity_form_conversion: {
+    strong: ['annuity form conversion', 'form conversion factor', 'optional form conversion'],
+    medium: ['form conversion', 'conversion factor']
+  },
+  actuarial_equivalence: {
+    strong: ['actuarial equivalence', 'actuarial equivalent'],
+    medium: ['actuarial assumptions', 'equivalent value']
+  },
+  mortality: {
+    strong: ['mortality table', 'mortality assumption', 'mortality basis', 'qx table'],
+    medium: ['mortality']
+  },
+  interest: {
+    strong: ['interest rate', 'interest assumption', 'pbGC interest', 'present value interest'],
+    medium: ['rate assumption', 'plan interest']
+  },
+  vesting: {
+    strong: ['vesting schedule', 'vested percentage', 'vested benefit'],
+    medium: ['fully vested', 'nonvested']
+  },
+  service: {
+    strong: ['years of service', 'service credit', 'credited service', 'eligibility service'],
+    medium: ['benefit service', 'vesting service']
+  },
+  credited_service: {
+    strong: ['credited service', 'benefit service credit'],
+    medium: ['service credited']
+  },
+  eligibility_service: {
+    strong: ['eligibility service', 'service for eligibility', 'eligibility years of service'],
+    medium: ['eligibility credit']
+  },
+  compensation: {
+    strong: ['compensation definition', 'covered compensation', 'pensionable compensation'],
+    medium: ['compensation']
+  },
+  final_average_compensation: {
+    strong: ['final average compensation', 'final average pay', 'average compensation'],
+    medium: ['highest average compensation']
+  },
+  cash_balance: {
+    strong: ['cash balance', 'hypothetical account', 'pay credit', 'interest credit'],
+    medium: ['account balance formula']
+  },
+  maximum_insurance_limit: {
+    strong: ['maximum insurance limit', 'maximum guaranteed benefit', 'pbgc maximum'],
+    medium: ['guaranteed benefit limit']
+  },
+  phase_in_limitation: {
+    strong: ['phase-in limitation', 'phase in limitation', 'phase-in percentage', 'phasein'],
+    medium: ['phase-in']
+  },
+  guaranteed_benefit_limitation: {
+    strong: ['guaranteed benefit limitation', 'guaranteed benefit limit'],
+    medium: ['guaranteed benefit']
+  },
+  asset_recovery_logic: {
+    strong: ['asset recovery', 'recovery allocation', 'asset transfer', 'plan merger'],
+    medium: ['allocated assets']
+  },
+  data_quality_assumptions: {
+    strong: ['missing data assumption', 'data quality assumption'],
+    medium: ['default assumption']
+  }
+};
 
 function updateR5Status(nameText, metaText){
   if (r5StatusName) r5StatusName.textContent = nameText;
@@ -1852,11 +1971,43 @@ function collectJsonTextBlocks(value, path='', out=[]){
   return out;
 }
 
-function addR5DomainEvidence(profile, domain, sourceName, text){
-  profile.domain_counts[domain] = (profile.domain_counts[domain] || 0) + 1;
+function r5EvidenceWeight(strength){
+  if (strength === 'strong') return 1;
+  if (strength === 'medium') return 0.55;
+  return 0.15;
+}
+
+function hasNegatedR5Context(text, index){
+  const before = String(text || '').slice(Math.max(0, index - 48), index).toLowerCase();
+  return /\b(no|not|without|excluded|excludes|not eligible|not available|does not|did not)\b/.test(before);
+}
+
+function r5EvidenceForText(text){
+  const value = String(text || '').toLowerCase();
+  const hits = [];
+  for (const [domain, rules] of Object.entries(R5_DOMAIN_EVIDENCE_RULES)) {
+    for (const strength of ['strong', 'medium']) {
+      for (const phrase of rules[strength] || []) {
+        const pattern = String(phrase || '').toLowerCase();
+        const index = value.indexOf(pattern);
+        if (index >= 0 && !hasNegatedR5Context(value, index)) {
+          hits.push({ domain, strength, phrase: pattern });
+          break;
+        }
+      }
+      if (hits.some(hit => hit.domain === domain)) break;
+    }
+  }
+  return hits;
+}
+
+function addR5DomainEvidence(profile, domain, sourceName, text, strength='medium'){
+  const weight = r5EvidenceWeight(strength);
+  profile.domain_counts[domain] = (profile.domain_counts[domain] || 0) + weight;
+  profile.domain_strength_counts[strength] = (profile.domain_strength_counts[strength] || 0) + 1;
   if (!profile.domain_evidence[domain]) profile.domain_evidence[domain] = [];
   if (profile.domain_evidence[domain].length < 4) {
-    profile.domain_evidence[domain].push({ source: sourceName, text: String(text || '').slice(0, 160) });
+    profile.domain_evidence[domain].push({ source: sourceName, strength, text: String(text || '').slice(0, 160) });
   }
 }
 
@@ -1867,21 +2018,29 @@ function extractR5UploadProfile(rawSummary, sourceName){
     parse_status: 'valid',
     recognized_text_blocks: blocks,
     benefit_domain_hits: {},
+    weak_domain_hits: {},
     token_counts: {},
     evidence_count: 0,
+    strong_evidence_count: 0,
+    medium_evidence_count: 0,
+    weak_evidence_count: 0,
     warnings: []
   };
   for (const block of blocks) {
     const text = `${block.path} ${block.text}`;
-    const domains = benefitDomainsForText(text);
+    const evidenceHits = r5EvidenceForText(text);
     const tokens = tokenizeText(text);
     for (const token of tokens) upload.token_counts[token] = (upload.token_counts[token] || 0) + 1;
-    for (const domain of domains) {
-      upload.benefit_domain_hits[domain] = upload.benefit_domain_hits[domain] || [];
-      if (upload.benefit_domain_hits[domain].length < 3) {
-        upload.benefit_domain_hits[domain].push({ source: sourceName, text: block.text.slice(0, 160) });
+    for (const hit of evidenceHits) {
+      const bucket = hit.strength === 'weak' ? upload.weak_domain_hits : upload.benefit_domain_hits;
+      bucket[hit.domain] = bucket[hit.domain] || [];
+      if (bucket[hit.domain].length < 3) {
+        bucket[hit.domain].push({ source: sourceName, strength: hit.strength, phrase: hit.phrase, text: block.text.slice(0, 160) });
       }
       upload.evidence_count++;
+      if (hit.strength === 'strong') upload.strong_evidence_count++;
+      else if (hit.strength === 'medium') upload.medium_evidence_count++;
+      else upload.weak_evidence_count++;
     }
   }
   if (!Object.keys(upload.benefit_domain_hits).length) {
@@ -1896,10 +2055,16 @@ function mergeR5CaseProfiles(uploads){
     source_names: [],
     source_count: 0,
     benefit_domain_coverage: [],
+    mentioned_domain_coverage: [],
+    weak_domain_coverage: [],
     domain_counts: {},
+    weak_domain_counts: {},
     domain_evidence: {},
+    weak_domain_evidence: {},
+    domain_strength_counts: { strong: 0, medium: 0, weak: 0 },
     token_counts: {},
     recognized_evidence_count: 0,
+    material_evidence_count: 0,
     confidence: 0,
     warnings: []
   };
@@ -1911,16 +2076,29 @@ function mergeR5CaseProfiles(uploads){
     profile.source_names.push(upload.source_name);
     profile.source_count++;
     profile.recognized_evidence_count += Number(upload.evidence_count || 0);
+    profile.material_evidence_count += Number(upload.strong_evidence_count || 0) + Number(upload.medium_evidence_count || 0);
     addCounts(profile.token_counts, upload.token_counts);
     for (const [domain, evidenceItems] of Object.entries(upload.benefit_domain_hits || {})) {
-      for (const evidence of evidenceItems) addR5DomainEvidence(profile, domain, evidence.source, evidence.text);
+      for (const evidence of evidenceItems) addR5DomainEvidence(profile, domain, evidence.source, evidence.text, evidence.strength);
+    }
+    for (const [domain, evidenceItems] of Object.entries(upload.weak_domain_hits || {})) {
+      for (const evidence of evidenceItems) {
+        profile.weak_domain_counts[domain] = (profile.weak_domain_counts[domain] || 0) + r5EvidenceWeight(evidence.strength);
+        profile.domain_strength_counts.weak++;
+        if (!profile.weak_domain_evidence[domain]) profile.weak_domain_evidence[domain] = [];
+        if (profile.weak_domain_evidence[domain].length < 3) profile.weak_domain_evidence[domain].push(evidence);
+      }
     }
     profile.warnings.push(...(upload.warnings || []));
   }
-  profile.benefit_domain_coverage = Object.keys(profile.domain_counts).sort();
+  profile.benefit_domain_coverage = Object.keys(profile.domain_counts)
+    .filter(domain => !R5_EXCLUDED_RANKING_DOMAINS.has(domain))
+    .sort();
+  profile.weak_domain_coverage = Object.keys(profile.weak_domain_counts).sort();
+  profile.mentioned_domain_coverage = [...new Set([...profile.benefit_domain_coverage, ...profile.weak_domain_coverage])].sort();
   const domainScore = Math.min(1, profile.benefit_domain_coverage.length / 8);
   const sourceScore = Math.min(1, profile.source_count / 3);
-  const evidenceScore = Math.min(1, profile.recognized_evidence_count / 18);
+  const evidenceScore = Math.min(1, profile.material_evidence_count / 18);
   profile.confidence = clamp01(domainScore * 0.60 + evidenceScore * 0.30 + sourceScore * 0.10);
   if (!profile.source_count) profile.warnings.push('No valid R5 summaries were loaded.');
   if (profile.confidence < R5_LOW_CONFIDENCE_THRESHOLD) profile.warnings.push('Low confidence: limited recognized R5 benefit/provision evidence.');
@@ -1944,16 +2122,18 @@ function projectV1CandidateProfile(record){
 
 function computeR5CandidateMatch(caseProfile, candidateProfile){
   const r5Domains = caseProfile.benefit_domain_coverage || [];
-  const candidateDomains = candidateProfile.benefit_domain_coverage || [];
+  const candidateDomains = (candidateProfile.benefit_domain_coverage || []).filter(domain => !R5_EXCLUDED_RANKING_DOMAINS.has(domain));
   const matched = r5Domains.filter(domain => candidateDomains.includes(domain)).sort();
   const missing = r5Domains.filter(domain => !candidateDomains.includes(domain)).sort();
   const extras = candidateDomains.filter(domain => !r5Domains.includes(domain)).sort();
+  const r5DomainCounts = Object.fromEntries(Object.entries(caseProfile.domain_counts || {}).filter(([domain]) => !R5_EXCLUDED_RANKING_DOMAINS.has(domain)));
+  const candidateDomainCounts = Object.fromEntries(Object.entries(candidateProfile.domain_counts || {}).filter(([domain]) => !R5_EXCLUDED_RANKING_DOMAINS.has(domain)));
   const domainSimilarity = 1 - setDistance(r5Domains, candidateDomains);
-  const frequencySimilarity = 1 - vectorDistance(caseProfile.domain_counts || {}, candidateProfile.domain_counts || {});
+  const frequencySimilarity = 1 - vectorDistance(r5DomainCounts, candidateDomainCounts);
   const reuseSimilarity = clamp01(domainSimilarity * 0.75 + frequencySimilarity * 0.25);
   const topEvidence = matched.slice(0, 4).map(domain => {
     const evidence = caseProfile.domain_evidence?.[domain]?.[0];
-    return evidence ? `${domain}: ${evidence.text}` : `${domain}: matched benefit domain`;
+    return evidence ? `${domain} (${evidence.strength || 'evidence'}): ${evidence.text}` : `${domain}: matched benefit domain`;
   });
   const warnings = [];
   if ((caseProfile.confidence || 0) < R5_LOW_CONFIDENCE_THRESHOLD) warnings.push('Low R5 evidence confidence; review manually before reuse.');
@@ -1999,10 +2179,10 @@ function renderR5Profile(profile){
   title.textContent = `${profile.source_count} R5 ${profile.source_count === 1 ? 'summary' : 'summaries'} merged`;
   const meta = document.createElement('div');
   meta.className = 'match-meta';
-  meta.textContent = `Confidence ${scorePercent(profile.confidence)} · ${profile.recognized_evidence_count} evidence hits`;
+  meta.textContent = `Confidence ${scorePercent(profile.confidence)} · ${profile.material_evidence_count} material evidence hits`;
   const domains = document.createElement('div');
   domains.className = 'r5-domain-list';
-  domains.textContent = profile.benefit_domain_coverage.length ? `Domains: ${profile.benefit_domain_coverage.join(', ')}` : 'Domains: none recognized';
+  domains.textContent = profile.benefit_domain_coverage.length ? `Material domains: ${profile.benefit_domain_coverage.join(', ')}` : 'Material domains: none recognized';
   card.appendChild(title);
   card.appendChild(meta);
   card.appendChild(domains);

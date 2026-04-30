@@ -1409,6 +1409,8 @@ test('R5 summaries merge into a temporary case profile and rank reusable V1 engi
   assert.equal(payload.checks.sourceCount, 2);
   assert.ok(payload.checks.domains.includes('qpsa'));
   assert.ok(payload.checks.domains.includes('lump_sum'));
+  assert.ok(!payload.checks.domains.includes('data_quality_assumptions'));
+  assert.ok(payload.checks.domains.length < 18);
   assert.ok(payload.checks.confidence > 0.4);
   assert.equal(payload.checks.matchCount, 2);
   assert.equal(payload.checks.firstName, 'qpsa-lump-v1.json');
@@ -1490,6 +1492,7 @@ test('R5 matching exposes low-confidence and reset states without storing R5 rec
   assert.equal(payload.checks.afterRankCount, 1);
   assert.equal(payload.checks.afterClearCount, 1);
   assert.ok(payload.checks.confidence < 0.35);
+  assert.deepEqual(payload.checks.warnings.filter(message => /no recognized/.test(message)).length, 1);
   assert.ok(payload.checks.warnings.some(message => /Low confidence/.test(message)));
   assert.ok(payload.checks.reportWarnings.some(message => /Low confidence/.test(message)));
   assert.equal(payload.checks.clearStatus, 'No R5 case loaded');
